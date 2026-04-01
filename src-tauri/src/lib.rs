@@ -1,13 +1,20 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tauri::{
-    async_runtime::spawn, AppHandle, CustomMenuItem, Icon, Manager, SystemTray, SystemTrayEvent,
-    SystemTrayMenu, SystemTrayMenuItem,
+    async_runtime::spawn,
+    image::Image,
+    menu::{MenuBuilder, MenuEvent},
+    tray::{TrayIconBuilder, TrayIconEvent},
+    AppHandle, Emitter, Manager,
 };
-use tauri_plugin_autostart::ManagerExt as AutostartExt;
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt as AutostartExt};
+use tokio::time::sleep;
 
 const MONITOR_EVENT: &str = "platform:monitors-updated";
 const AUTOSTART_EVENT: &str = "platform:autostart-updated";
+const TRAY_ID_SHOW: &str = "tray-show";
+const TRAY_ID_AUTOSTART: &str = "tray-autostart";
+const TRAY_ID_QUIT: &str = "tray-quit";
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 struct MonitorPoint {
@@ -101,12 +108,12 @@ fn collect_monitors(app: &AppHandle) -> tauri::Result<Vec<MonitorDescriptor>> {
         .into_iter()
         .enumerate()
         .map(|(idx, monitor)| {
-            let position = monitor.position();
-            let size = monitor.size();
-            let work_area = monitor.work_area();
+            let position = monitor.position().clone();
+            let size = monitor.size().clone();
+            let work_area = monitor.work_area().clone();
             MonitorDescriptor {
                 id: format!("monitor-{}", idx),
-                name: monitor.name(),
+                name: monitor.name().cloned(),
                 scale_factor: monitor.scale_factor(),
                 position: MonitorPoint {
                     x: position.x,
@@ -116,11 +123,11 @@ fn collect_monitors(app: &AppHandle) -> tauri::Result<Vec<MonitorDescriptor>> {
                     width: size.width,
                     height: size.height,
                 },
-                work_area: work_area.map(|area| MonitorRect {
-                    x: area.position.x,
-                    y: area.position.y,
-                    width: area.size.width,
-                    height: area.size.height,
+                work_area: Some(MonitorRect {
+                    x: work_area.position.x,
+                    y: work_area.position.y,
+                    width: work_area.size.width,
+                    height: work_area.size.height,
                 }),
             }
         })
@@ -138,22 +145,9 @@ fn start_monitor_broadcast(app: AppHandle) {
                     previous = Some(monitors);
                 }
             }
-            tauri::async_runtime::sleep(Duration::from_secs(2)).await;
+            sleep(Duration::from_secs(2)).await;
         }
     });
-}
-
-fn build_tray() -> SystemTray {
-    let show = CustomMenuItem::new("show", "显示隅灵");
-    let toggle_autostart = CustomMenuItem::new("toggle-autostart", "切换开机自启");
-    let quit = CustomMenuItem::new("quit", "退出");
-    let menu = SystemTrayMenu::new()
-        .add_item(show)
-        .add_item(toggle_autostart)
-        .add_native_item(SystemTrayMenuItem::Separator)
-        .add_item(quit);
-    let icon = Icon::Raw(include_bytes!("../icons/32x32.png").to_vec());
-    SystemTray::new().with_menu(menu).with_icon(icon)
 }
 
 fn reveal_main_window(app: &AppHandle) {
@@ -178,29 +172,58 @@ fn handle_autostart_toggle(app: &AppHandle) {
     }
 }
 
-fn handle_tray_event(app: &AppHandle, event: SystemTrayEvent) {
-    match event {
-        SystemTrayEvent::MenuItemClick { id, .. } => match id.as_str() {
-            "show" => reveal_main_window(app),
-            "toggle-autostart" => handle_autostart_toggle(app),
-            "quit" => app.exit(0),
-            _ => {}
-        },
-        SystemTrayEvent::LeftClick { .. } => reveal_main_window(app),
+fn handle_tray_menu_event(app: &AppHandle, event: &MenuEvent) {
+    match event.id().0.as_str() {
+        TRAY_ID_SHOW => reveal_main_window(app),
+        TRAY_ID_AUTOSTART => handle_autostart_toggle(app),
+        TRAY_ID_QUIT => app.exit(0),
         _ => {}
     }
+}
+
+fn init_tray(app: &AppHandle) -> tauri::Result<()> {
+    #[cfg(desktop)]
+    {
+        let menu = MenuBuilder::new(app)
+            .text(TRAY_ID_SHOW, "显示隅灵")
+            .text(TRAY_ID_AUTOSTART, "切换开机自启")
+            .text(TRAY_ID_QUIT, "退出")
+            .build()?;
+
+        let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
+
+        TrayIconBuilder::new()
+            .menu(&menu)
+            .icon(icon)
+            .show_menu_on_left_click(true)
+            .on_menu_event(|app, event| handle_tray_menu_event(app, &event))
+            .on_tray_icon_event(|tray, event| {
+                if let TrayIconEvent::Click { .. } = event {
+                    if let Some(window) = tray.app_handle().get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                }
+            })
+            .build(app)?;
+    }
+
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .system_tray(build_tray())
-        .on_system_tray_event(handle_tray_event)
         .setup(|app| {
-            start_monitor_broadcast(app.handle());
+            let handle = app.handle();
+            start_monitor_broadcast(handle.clone());
+            init_tray(&handle)?;
             Ok(())
         })
-        .plugin(tauri_plugin_autostart::init(Default::default()))
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             platform_get_monitors,
