@@ -17,7 +17,7 @@
 4. 提交 PR，附上变更说明与验证截图/日志。
 
 ## 代码约定
-- 前端：Vue 3 + TypeScript，使用 Composition API、Pinia；样式遵循 Tailwind Utility-first。
+- 前端：Vue 3 + JavaScript（Composition API + Pinia）；样式遵循 Tailwind Utility-first。
 - 动画资源：放入 `assets/motion/`，遵循 manifest 约定。
 - 后端：Rust stable，保持 `cargo fmt` 与 `cargo clippy -- -D warnings` 通过。
 - 文档：设计与计划更新存放在 `docs/superpowers/`，完成阶段后及时勾选 Todo 并追记日期。
