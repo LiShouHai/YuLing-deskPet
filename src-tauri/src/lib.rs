@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tauri::{
-    async_runtime::{sleep, spawn},
+    async_runtime::spawn,
     image::Image,
     menu::{MenuBuilder, MenuEvent},
     tray::{TrayIconBuilder, TrayIconEvent},
@@ -144,7 +144,9 @@ fn start_monitor_broadcast(app: AppHandle) {
                     previous = Some(monitors);
                 }
             }
-            sleep(Duration::from_secs(2)).await;
+            tauri::async_runtime::handle()
+                .sleep(Duration::from_secs(2))
+                .await;
         }
     });
 }
