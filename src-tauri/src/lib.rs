@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tauri::{
-    async_runtime::spawn, AppHandle, CustomMenuItem, Manager, SystemTray, SystemTrayEvent,
+    async_runtime::spawn, AppHandle, CustomMenuItem, Icon, Manager, SystemTray, SystemTrayEvent,
     SystemTrayMenu, SystemTrayMenuItem,
 };
 use tauri_plugin_autostart::ManagerExt as AutostartExt;
@@ -152,7 +152,8 @@ fn build_tray() -> SystemTray {
         .add_item(toggle_autostart)
         .add_native_item(SystemTrayMenuItem::Separator)
         .add_item(quit);
-    SystemTray::new().with_menu(menu)
+    let icon = Icon::Raw(include_bytes!("../icons/32x32.png").to_vec());
+    SystemTray::new().with_menu(menu).with_icon(icon)
 }
 
 fn reveal_main_window(app: &AppHandle) {
