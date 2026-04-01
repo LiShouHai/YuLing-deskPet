@@ -1,0 +1,7 @@
+{
+  "idle": { "fps": 24, "loop": true, "interruptible": true },
+  "react": { "fps": 18, "loop": false, "interruptible": true, "duration": 900 },
+  "drag": { "fps": 30, "loop": true, "interruptible": false },
+  "sleep": { "fps": 8, "loop": true, "interruptible": true },
+  "reminderPulse": { "fps": 12, "loop": true, "interruptible": true }
+}

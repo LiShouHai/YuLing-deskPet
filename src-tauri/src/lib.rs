@@ -1,3 +1,8 @@
+//! 隅灵桌宠 PlatformBridge：
+//! - 暴露给前端的 Tauri 命令（显示器、自启动、坐标转换）
+//! - 系统托盘初始化与事件处理
+//! - 监视器轮询广播，保证多屏信息实时刷新
+
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tauri::{
@@ -15,18 +20,21 @@ const TRAY_ID_SHOW: &str = "tray-show";
 const TRAY_ID_AUTOSTART: &str = "tray-autostart";
 const TRAY_ID_QUIT: &str = "tray-quit";
 
+/// 屏幕坐标点（物理像素）
 #[derive(Debug, Clone, Serialize, PartialEq)]
 struct MonitorPoint {
     x: i32,
     y: i32,
 }
 
+/// 屏幕尺寸
 #[derive(Debug, Clone, Serialize, PartialEq)]
 struct MonitorSize {
     width: u32,
     height: u32,
 }
 
+/// 屏幕可用区域，包含坐标与尺寸
 #[derive(Debug, Clone, Serialize, PartialEq)]
 struct MonitorRect {
     x: i32,
@@ -35,6 +43,7 @@ struct MonitorRect {
     height: u32,
 }
 
+/// 聚合的屏幕描述信息
 #[derive(Debug, Clone, Serialize, PartialEq)]
 struct MonitorDescriptor {
     id: String,
@@ -57,11 +66,13 @@ struct PhysicalPositionPayload {
     y: i32,
 }
 
+/// 返回所有屏幕描述
 #[tauri::command]
 fn platform_get_monitors(app: AppHandle) -> Result<Vec<MonitorDescriptor>, String> {
     collect_monitors(&app).map_err(|err| err.to_string())
 }
 
+/// 将逻辑坐标转换为物理坐标
 #[tauri::command]
 fn platform_logical_to_physical(
     scale_factor: f64,
@@ -73,6 +84,7 @@ fn platform_logical_to_physical(
     }
 }
 
+/// 将物理坐标转换为逻辑坐标
 #[tauri::command]
 fn platform_physical_to_logical(
     scale_factor: f64,
@@ -84,6 +96,7 @@ fn platform_physical_to_logical(
     }
 }
 
+/// 切换开机自启状态，并将结果广播给前端
 #[tauri::command]
 fn platform_set_autostart(app: AppHandle, enabled: bool) -> Result<bool, String> {
     let launcher = app.autolaunch();
@@ -96,11 +109,13 @@ fn platform_set_autostart(app: AppHandle, enabled: bool) -> Result<bool, String>
     Ok(enabled)
 }
 
+/// 读取当前自启状态
 #[tauri::command]
 fn platform_get_autostart(app: AppHandle) -> Result<bool, String> {
     app.autolaunch().is_enabled().map_err(|err| err.to_string())
 }
 
+/// 工具函数：从 runtime 获取完整屏幕列表
 fn collect_monitors(app: &AppHandle) -> tauri::Result<Vec<MonitorDescriptor>> {
     let monitors = app.available_monitors()?;
     Ok(monitors
@@ -133,6 +148,7 @@ fn collect_monitors(app: &AppHandle) -> tauri::Result<Vec<MonitorDescriptor>> {
         .collect())
 }
 
+/// 后台轮询屏幕变化并通过事件推送到前端
 fn start_monitor_broadcast(app: AppHandle) {
     spawn(async move {
         let mut previous: Option<Vec<MonitorDescriptor>> = None;
@@ -144,11 +160,13 @@ fn start_monitor_broadcast(app: AppHandle) {
                     previous = Some(monitors);
                 }
             }
+            // 轮询间隔 2 秒，兼顾实时性与性能
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
     });
 }
 
+/// 显示主窗口并聚焦
 fn reveal_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
@@ -156,6 +174,7 @@ fn reveal_main_window(app: &AppHandle) {
     }
 }
 
+/// 托盘菜单中“切换自启”项的处理
 fn handle_autostart_toggle(app: &AppHandle) {
     if let Ok(current) = app.autolaunch().is_enabled() {
         let launcher = app.autolaunch();
@@ -171,6 +190,7 @@ fn handle_autostart_toggle(app: &AppHandle) {
     }
 }
 
+/// 统一处理托盘菜单事件
 fn handle_tray_menu_event(app: &AppHandle, event: &MenuEvent) {
     match event.id().0.as_str() {
         TRAY_ID_SHOW => reveal_main_window(app),
@@ -180,6 +200,7 @@ fn handle_tray_menu_event(app: &AppHandle, event: &MenuEvent) {
     }
 }
 
+/// 初始化系统托盘：菜单、图标、点击行为
 fn init_tray(app: &AppHandle) -> tauri::Result<()> {
     #[cfg(desktop)]
     {
@@ -215,8 +236,8 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let handle = app.handle();
-            start_monitor_broadcast(handle.clone());
-            init_tray(&handle)?;
+            start_monitor_broadcast(handle.clone()); // 启动屏幕轮询
+            init_tray(&handle)?; // 建立托盘与菜单
             Ok(())
         })
         .plugin(tauri_plugin_autostart::init(
