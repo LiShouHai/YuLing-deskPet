@@ -144,9 +144,10 @@ fn start_monitor_broadcast(app: AppHandle) {
                     previous = Some(monitors);
                 }
             }
-            tauri::async_runtime::handle()
-                .sleep(Duration::from_secs(2))
-                .await;
+            #[cfg(any(target_os = "ios", target_os = "android"))]
+            tauri::async_runtime::sleep(Duration::from_secs(2)).await;
+            #[cfg(not(any(target_os = "ios", target_os = "android")))]
+            tokio::time::sleep(Duration::from_secs(2)).await;
         }
     });
 }
