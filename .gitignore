@@ -1,0 +1,23 @@
+# Node / pnpm
+node_modules/
+.pnpm-store/
+
+# Build outputs
+/dist/
+/.vite/
+/out/
+
+# Tauri / Rust
+/src-tauri/target/
+/src-tauri/.cargo/
+/src-tauri/Cargo.lock
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
