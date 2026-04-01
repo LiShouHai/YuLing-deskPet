@@ -1,14 +1,13 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tauri::{
-    async_runtime::spawn,
+    async_runtime::{sleep, spawn},
     image::Image,
     menu::{MenuBuilder, MenuEvent},
     tray::{TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager,
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt as AutostartExt};
-use tokio::time::sleep;
 
 const MONITOR_EVENT: &str = "platform:monitors-updated";
 const AUTOSTART_EVENT: &str = "platform:autostart-updated";
