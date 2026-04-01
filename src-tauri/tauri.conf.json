@@ -26,13 +26,13 @@
         "visible": true
       }
     ],
-    "systemTray": {
-      "iconPath": "icons/32x32.png",
-      "menuOnLeftClick": true
-    },
     "security": {
       "csp": null
     }
+  },
+  "systemTray": {
+    "iconPath": "icons/32x32.png",
+    "menuOnLeftClick": true
   },
   "bundle": {
     "active": true,
