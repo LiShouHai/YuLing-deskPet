@@ -123,8 +123,3 @@ export async function onReminderUpdated(callback) {
   if (!isTauriEnvironment) return noopUnlisten;
   return listen("reminder:updated", (event) => callback(event.payload));
 }
-
-export async function onReminderToggle(callback) {
-  if (!isTauriEnvironment) return noopUnlisten;
-  return listen("platform:show-reminders", (event) => callback(event.payload));
-}

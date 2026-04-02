@@ -14,7 +14,6 @@ import {
   isTauriEnvironment,
   onReminderFired,
   onReminderUpdated,
-  onReminderToggle,
   onAutostartUpdate,
   onMonitorUpdate,
   setAutostart,
@@ -51,19 +50,8 @@ let unlistenAutostart = null;
 let reminderTimer = null;
 let unlistenReminderFired = null;
 let unlistenReminderUpdated = null;
-let unlistenReminderToggle = null;
 const showBubble = ref(false);
-const showReminderModal = ref(false);
-const overlayInteractive = ref(false);
-const reminderError = ref("");
 let bubbleTimer = null;
-let overlayActivationTimer = null;
-const handleKeydown = (event) => {
-  if (event.key === "Escape" && showReminderModal.value) {
-    closeReminderModal();
-  }
-};
-const PANEL_SIZE = { width: 420, height: 540 };
 
 const idleFrames = motionManifest.idle?.frames ?? [];
 const manualFrameIndex = ref(0);
@@ -81,27 +69,6 @@ const currentFrameSrc = computed(() => {
 
 function formatRemindTime(timestamp) {
   return new Date(timestamp).toLocaleString();
-}
-
-async function handleReminderSubmit() {
-  reminderError.value = "";
-  try {
-    await reminderStore.addReminder();
-  } catch (error) {
-    reminderError.value = error?.message ?? "创建提醒失败";
-  }
-}
-
-async function handleComplete(id) {
-  await reminderStore.complete(id);
-}
-
-async function handleSnooze(id) {
-  await reminderStore.snooze(id, 5 * 60 * 1000);
-}
-
-async function handleDelete(id) {
-  await reminderStore.remove(id);
 }
 
 /**
@@ -235,34 +202,6 @@ function handleReminderFired(payload) {
   }, 6000);
 }
 
-async function closeReminderModal() {
-  showReminderModal.value = false;
-  overlayInteractive.value = false;
-  if (overlayActivationTimer) {
-    clearTimeout(overlayActivationTimer);
-    overlayActivationTimer = null;
-  }
-}
-
-async function openReminderModal() {
-  if (overlayActivationTimer) {
-    clearTimeout(overlayActivationTimer);
-    overlayActivationTimer = null;
-  }
-  showReminderModal.value = true;
-  overlayInteractive.value = false;
-  await nextTick();
-  if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
-    window.requestAnimationFrame(() => {
-      overlayActivationTimer = window.setTimeout(() => {
-        overlayInteractive.value = true;
-      }, 120);
-    });
-  } else {
-    overlayInteractive.value = true;
-  }
-}
-
 /**
  * 手动拖拽方案：
  * - 监听 pointermove 手动设置窗口位置
@@ -340,10 +279,6 @@ onMounted(async () => {
   await Promise.all([syncMonitors(), syncAutostart()]);
   await reminderStore.fetchReminders();
 
-  if (typeof window !== "undefined") {
-    window.addEventListener("keydown", handleKeydown);
-  }
-
   if (isTauriEnvironment) {
     unlistenMonitors = await onMonitorUpdate((payload) => {
       petStore.setMonitors(payload ?? []);
@@ -375,9 +310,6 @@ onBeforeUnmount(() => {
   unlistenReminderToggle?.();
   if (reminderTimer) clearTimeout(reminderTimer);
   if (bubbleTimer) clearTimeout(bubbleTimer);
-  if (typeof window !== "undefined") {
-    window.removeEventListener("keydown", handleKeydown);
-  }
 });
 
 // 监听关键状态，变化时更新动画状态
@@ -429,83 +361,6 @@ watch(
         <div v-if="petStore.reminderActive" class="reminder-pulse" />
       </div>
     </div>
-    <Transition name="modal">
-      <div
-        v-if="showReminderModal"
-        class="reminder-overlay"
-        :class="{ 'is-live': overlayInteractive }"
-        @click.self="overlayInteractive && closeReminderModal()"
-      >
-        <section
-          class="reminder-modal"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="reminder-panel-title"
-          :style="{
-            width: PANEL_SIZE.width + 'px',
-            height: PANEL_SIZE.height + 'px',
-          }"
-          @pointerdown.stop
-        >
-          <div class="modal-hero-bar" />
-          <header class="modal-header">
-            <div>
-              <p class="modal-label">提醒列表</p>
-              <h3 id="reminder-panel-title">{{ reminderStore.items.length || "0" }} 项任务</h3>
-            </div>
-            <button type="button" class="icon-btn" @click="closeReminderModal" aria-label="关闭提醒面板">
-              ✕
-            </button>
-          </header>
-          <form class="modal-form" @submit.prevent="handleReminderSubmit">
-            <label class="field">
-              <span>提醒标题</span>
-              <input
-                v-model="reminderStore.composer.title"
-                type="text"
-                placeholder="喝水、伸展"
-                required
-              />
-            </label>
-            <label class="field">
-              <span>备注（可选）</span>
-              <textarea
-                v-model="reminderStore.composer.message"
-                rows="2"
-                placeholder="补充提示语"
-              />
-            </label>
-            <label class="field">
-              <span>提醒时间</span>
-              <input
-                v-model="reminderStore.composer.remindAt"
-                type="datetime-local"
-                required
-              />
-            </label>
-            <button class="primary-btn" type="submit" :disabled="reminderStore.submitting">
-              {{ reminderStore.submitting ? "保存中…" : "保存提醒" }}
-            </button>
-            <p v-if="reminderError" class="reminder-error">{{ reminderError }}</p>
-          </form>
-          <ul class="reminder-list">
-            <li v-for="item in reminderStore.items" :key="item.id">
-              <div class="reminder-info">
-                <strong>{{ item.title }}</strong>
-                <small>{{ formatRemindTime(item.remind_at) }}</small>
-                <p v-if="item.message">{{ item.message }}</p>
-              </div>
-              <div class="reminder-actions">
-                <button type="button" @click="handleComplete(item.id)">完成</button>
-                <button type="button" @click="handleSnooze(item.id)">延后5分钟</button>
-                <button type="button" @click="handleDelete(item.id)">删除</button>
-              </div>
-            </li>
-            <li v-if="!reminderStore.items.length" class="placeholder">暂无提醒，使用上方表单创建。</li>
-          </ul>
-        </section>
-      </div>
-    </Transition>
   </div>
 </template>
 
