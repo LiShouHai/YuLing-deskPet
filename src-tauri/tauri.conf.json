@@ -31,15 +31,6 @@
       "csp": null
     }
   },
-  "allowlist": {
-    "all": false,
-    "window": {
-      "all": false,
-      "center": true,
-      "setPosition": true,
-      "setSize": true
-    }
-  },
   "bundle": {
     "active": true,
     "targets": "all",
