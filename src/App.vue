@@ -376,7 +376,7 @@ watch(
     </div>
 
     <Transition name="sheet">
-      <section v-show="showReminderPanel" class="reminder-panel">
+      <section v-if="showReminderPanel" class="reminder-panel">
         <header class="panel-header">
           <div>
             <p class="panel-label">提醒计划</p>
@@ -444,17 +444,13 @@ watch(
   height: 100%;
   min-width: 300px;
   min-height: 360px;
-  padding: 20px 20px 16px;
+  padding: 20px;
   box-sizing: border-box;
   user-select: none;
   display: flex;
   flex-direction: column;
   gap: 18px;
-  background: radial-gradient(circle at top, rgba(34, 57, 91, 0.45), rgba(6, 10, 16, 0.85));
-  border-radius: 28px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 20px 60px rgba(5, 6, 11, 0.75);
-  backdrop-filter: blur(18px);
+  background: transparent;
 }
 
 .pet-stage {
@@ -462,7 +458,13 @@ watch(
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 24px;
+  background: radial-gradient(circle at top, rgba(34, 57, 91, 0.35), rgba(6, 10, 16, 0.9));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 20px 60px rgba(5, 6, 11, 0.65);
+  backdrop-filter: blur(18px);
 }
 
 .pet-avatar {
@@ -509,18 +511,24 @@ watch(
 }
 
 .reminder-panel {
-  flex: 1;
-  width: 100%;
-  padding: 16px;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  top: calc(100% - 20px);
+  width: 260px;
+  max-height: 320px;
+  padding: 14px;
   border-radius: 20px;
-  background: rgba(12, 18, 28, 0.85);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+  background: rgba(9, 11, 18, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: 0 25px 55px rgba(5, 6, 11, 0.65);
   color: #fdfdfd;
   backdrop-filter: blur(20px);
   display: flex;
   flex-direction: column;
   gap: 12px;
+  z-index: 10;
+  padding-top: 18px;
 }
 
 .panel-header {
@@ -617,9 +625,9 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 8px;
-  flex: 1;
+  max-height: 140px;
   overflow-y: auto;
-  }
+}
 
 .reminder-list li {
   border-radius: 12px;
@@ -727,15 +735,15 @@ watch(
   }
 }
 </style>
-.pet-shell .sheet-enter-active,
-.pet-shell .sheet-leave-active {
+.sheet-enter-active,
+.sheet-leave-active {
   transition: opacity 0.25s ease, transform 0.25s ease;
 }
 
-.pet-shell .sheet-enter-from,
-.pet-shell .sheet-leave-to {
+.sheet-enter-from,
+.sheet-leave-to {
   opacity: 0;
-  transform: translateY(8px);
+  transform: translateY(12px) scale(0.98);
 }
 
 .reminder-toast {
