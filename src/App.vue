@@ -320,6 +320,7 @@ onMounted(async () => {
     unlistenReminderFired = await onReminderFired((payload) => handleReminderFired(payload));
     unlistenReminderUpdated = await onReminderUpdated(() => reminderStore.fetchReminders());
     unlistenReminderToggle = await onReminderToggle(() => {
+      console.info("收到托盘提醒列表事件，开启提醒面板");
       showReminderModal.value = true;
     });
   }
@@ -460,12 +461,11 @@ watch(
 <style scoped>
 .pet-shell {
   position: relative;
-  width: 240px;
-  height: 240px;
-  padding: 20px;
-  box-sizing: border-box;
+  width: fit-content;
+  height: fit-content;
+  padding: 0;
   user-select: none;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   background: transparent;
@@ -473,32 +473,32 @@ watch(
 
 .pet-stage {
   position: relative;
-  display: flex;
+  display: inline-flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
-  padding: 16px;
-  width: 200px;
-  height: 200px;
-  border-radius: 32px;
-  background: radial-gradient(circle at top, rgba(34, 57, 91, 0.45), rgba(6, 10, 16, 0.92));
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  box-shadow: 0 10px 30px rgba(5, 6, 11, 0.65);
-  backdrop-filter: blur(18px);
+  gap: 8px;
+  padding: 0;
+  width: fit-content;
+  height: fit-content;
+  border-radius: 16px;
+  background: transparent;
+  border: none;
+  box-shadow: none;
 }
 
 .pet-avatar {
   position: relative;
-  width: 180px;
-  height: 180px;
-  border-radius: 120px;
-  background: linear-gradient(160deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.04));
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  width: 168px;
+  height: 168px;
+  border-radius: 50%;
+  background: transparent;
+  border: none;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: transform 0.25s ease;
-  box-shadow: 0 20px 45px rgba(23, 25, 35, 0.35);
+  cursor: grab;
+  touch-action: none;
 }
 
 .pet-avatar.dragging {
@@ -636,20 +636,21 @@ watch(
 }
 
 .reminder-overlay {
-  position: absolute;
+  position: fixed;
   inset: 0;
+  padding: 24px;
   background: rgba(4, 5, 8, 0.55);
   backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 20;
+  z-index: 1200;
 }
 
 .reminder-modal {
-  width: 280px;
-  max-height: 360px;
-  padding: 18px;
+  width: min(360px, 90vw);
+  max-height: min(420px, 90vh);
+  padding: 20px;
   border-radius: 20px;
   background: rgba(8, 11, 18, 0.92);
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -657,6 +658,7 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 12px;
+  overflow-y: auto;
 }
 
 .modal-header {
