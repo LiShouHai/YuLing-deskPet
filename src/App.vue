@@ -20,12 +20,21 @@ import { usePetStore } from "./stores/petStore";
 import { useMotionController } from "./motion/useMotionController";
 import motionManifest from "./assets/motion/manifest.json";
 
+const frameModules = import.meta.glob("./assets/motion/frames/*.png", {
+  eager: true,
+  import: "default",
+});
+const frameUrlMap = Object.fromEntries(
+  Object.entries(frameModules).map(([key, value]) => [
+    key.replace("./assets/motion/", ""),
+    value,
+  ])
+);
+
 // Pinia store 承载跨组件共享状态
 const petStore = usePetStore();
 // Tauri 提供的窗口句柄，用于操控位置等特性
 const tauriWindow = isTauriEnvironment ? getCurrentWindow() : null;
-// 控制信息面板显隐，双击宠物切换
-const showControlPanel = ref(true);
 // 通过计算属性获取监视器列表和电源模式，保持响应式
 const monitors = computed(() => petStore.monitors);
 const powerMode = computed(() => petStore.powerMode);
@@ -47,7 +56,7 @@ const currentFrameSrc = computed(() => {
   if (!frames.length) return "";
   const index = Math.floor(frameProgress.value * frames.length) % frames.length;
   const path = frames[index];
-  return new URL(`./assets/motion/${path}`, import.meta.url).href;
+  return frameUrlMap[path] ?? "";
 });
 
 /**
@@ -164,13 +173,6 @@ function handleAvatarClick() {
 }
 
 /**
- * 双击切换面板显隐
- */
-function togglePanel() {
-  showControlPanel.value = !showControlPanel.value;
-}
-
-/**
  * 手动拖拽方案：
  * - 监听 pointermove 手动设置窗口位置
  * - 用于 startDragging 不可用或报错时的兜底
@@ -277,8 +279,8 @@ watch(
 </script>
 
 <template>
-  <!-- 根容器，双击触发控制面板显隐 -->
-  <div class="pet-shell" @dblclick="togglePanel">
+  <!-- 根容器：仅展示宠物本体 -->
+  <div class="pet-shell">
     <div
       class="pet-avatar"
       :class="[`state-${motionState}`, { dragging: petStore.dragging }]"
@@ -309,71 +311,35 @@ watch(
       <div v-if="petStore.reminderActive" class="reminder-pulse" />
     </div>
 
-    <!-- 灵盒面板：展示系统状态与快捷操作 -->
-    <section v-if="showControlPanel" class="status-panel glass">
-      <p class="status-label">运行状态</p>
-      <p class="status-value">{{ petStore.statusText }}</p>
-      <div class="control-row">
-        <button class="ghost-btn" type="button" @click="handleAutostartToggle">
-          {{ petStore.autostartEnabled ? "关闭" : "开启" }} 开机自启
-        </button>
-        <button class="ghost-btn" type="button" @click="toggleLowPower">
-          {{ petStore.powerMode === "low" ? "恢复常速" : "低功耗" }}
-        </button>
-      </div>
-      <div class="control-row">
-        <button class="text-btn" type="button" @click="triggerReminder">触发提醒</button>
-        <span v-if="petStore.lastUpdated" class="hint">最近同步：{{ petStore.lastUpdated }}</span>
-      </div>
-    </section>
-
-    <!-- 显示器列表：实时展示 PlatformBridge 回传数据 -->
-    <section class="monitor-panel glass">
-      <header>显示器 ({{ monitors.length }})</header>
-      <ul>
-        <li v-for="monitor in monitors" :key="monitor.id">
-          <div class="dot" />
-          <div class="info">
-            <p>{{ formatMonitorLabel(monitor) }}</p>
-            <small v-if="monitor.work_area">
-              可用区域：{{ monitor.work_area.width }}×{{ monitor.work_area.height }}
-            </small>
-          </div>
-        </li>
-        <li v-if="!monitors.length" class="placeholder">
-          暂无显示器数据，等待系统回传…
-        </li>
-      </ul>
-    </section>
   </div>
 </template>
 
 <style scoped>
 .pet-shell {
   position: relative;
-  width: 100%;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  padding: 18px;
+  width: 220px;
+  height: 220px;
+  padding: 20px;
   box-sizing: border-box;
   user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
 }
 
 .pet-avatar {
   position: relative;
   width: 180px;
   height: 180px;
-  margin: 0 auto;
   border-radius: 120px;
   background: linear-gradient(160deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.04));
-  backdrop-filter: blur(20px);
   border: 1px solid rgba(255, 255, 255, 0.15);
   display: flex;
   align-items: center;
   justify-content: center;
   transition: transform 0.25s ease;
+  box-shadow: 0 20px 45px rgba(23, 25, 35, 0.35);
 }
 
 .pet-avatar.dragging {
@@ -452,114 +418,6 @@ watch(
   border-radius: 50%;
   border: 2px solid rgba(65, 255, 211, 0.6);
   animation: pulse 1.6s ease-in-out infinite;
-}
-
-.glass {
-  position: relative;
-  z-index: 1;
-  backdrop-filter: blur(30px);
-  background: rgba(18, 18, 27, 0.65);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 18px;
-  padding: 16px;
-  box-shadow: 0 15px 40px rgba(0, 0, 0, 0.35);
-  color: #f4f6fb;
-}
-
-.status-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.status-label {
-  font-size: 12px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.65);
-}
-
-.status-value {
-  font-size: 18px;
-  font-weight: 600;
-}
-
-.control-row {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  align-items: center;
-}
-
-.ghost-btn {
-  border-radius: 999px;
-  padding: 6px 16px;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  color: inherit;
-  font-size: 13px;
-  letter-spacing: 0.05em;
-  transition: background 0.2s ease, border 0.2s ease;
-}
-
-.ghost-btn:hover {
-  background: rgba(255, 255, 255, 0.2);
-  border-color: rgba(255, 255, 255, 0.35);
-}
-
-.text-btn {
-  border: none;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.8);
-  font-size: 12px;
-  text-decoration: underline;
-  cursor: pointer;
-}
-
-.monitor-panel ul {
-  list-style: none;
-  padding: 0;
-  margin: 8px 0 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-height: 180px;
-  overflow: hidden;
-}
-
-.monitor-panel li {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-}
-
-.monitor-panel header {
-  font-size: 14px;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.9);
-}
-
-.info small {
-  color: rgba(255, 255, 255, 0.6);
-}
-
-.dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #27e3b9;
-  box-shadow: 0 0 6px rgba(39, 227, 185, 0.9);
-}
-
-.placeholder {
-  opacity: 0.6;
-  font-style: italic;
-}
-
-.hint {
-  font-size: 11px;
-  opacity: 0.55;
 }
 
 @keyframes float {
