@@ -12,11 +12,14 @@ import {
   fetchMonitors,
   getAutostartStatus,
   isTauriEnvironment,
+  onReminderFired,
+  onReminderUpdated,
   onAutostartUpdate,
   onMonitorUpdate,
   setAutostart,
 } from "./platformBridge";
 import { usePetStore } from "./stores/petStore";
+import { useReminderStore } from "./stores/reminderStore";
 import { useMotionController } from "./motion/useMotionController";
 import motionManifest from "./assets/motion/manifest.json";
 
@@ -33,17 +36,22 @@ const frameUrlMap = Object.fromEntries(
 
 // Pinia store 承载跨组件共享状态
 const petStore = usePetStore();
+const reminderStore = useReminderStore();
 // Tauri 提供的窗口句柄，用于操控位置等特性
 const tauriWindow = isTauriEnvironment ? getCurrentWindow() : null;
 // 通过计算属性获取监视器列表和电源模式，保持响应式
 const monitors = computed(() => petStore.monitors);
 const powerMode = computed(() => petStore.powerMode);
+const showReminderPanel = ref(false);
+const reminderError = ref("");
 // MotionController 提供当前动画状态、覆盖层强度以及状态 setter
 const { state: motionState, overlayIntensity, setState } = useMotionController(powerMode);
 
 let unlistenMonitors = null;
 let unlistenAutostart = null;
 let reminderTimer = null;
+let unlistenReminderFired = null;
+let unlistenReminderUpdated = null;
 
 const idleFrames = motionManifest.idle?.frames ?? [];
 const manualFrameIndex = ref(0);
@@ -176,6 +184,45 @@ function handleAvatarClick() {
 }
 
 /**
+ * 切换提醒面板
+ */
+function toggleReminderPanel() {
+  showReminderPanel.value = !showReminderPanel.value;
+}
+
+function formatRemindTime(timestamp) {
+  return new Date(timestamp).toLocaleString();
+}
+
+async function handleReminderSubmit() {
+  reminderError.value = "";
+  try {
+    await reminderStore.addReminder();
+  } catch (error) {
+    reminderError.value = error?.message ?? "创建提醒失败";
+  }
+}
+
+async function handleComplete(id) {
+  await reminderStore.complete(id);
+}
+
+async function handleSnooze(id) {
+  await reminderStore.snooze(id, 5 * 60 * 1000);
+}
+
+async function handleDelete(id) {
+  await reminderStore.remove(id);
+}
+
+function handleReminderFired(payload) {
+  reminderStore.markFired(payload);
+  petStore.pulseReminder(true);
+  if (reminderTimer) clearTimeout(reminderTimer);
+  reminderTimer = setTimeout(() => petStore.pulseReminder(false), 5000);
+}
+
+/**
  * 手动拖拽方案：
  * - 监听 pointermove 手动设置窗口位置
  * - 用于 startDragging 不可用或报错时的兜底
@@ -250,6 +297,7 @@ async function beginDrag(event) {
  */
 onMounted(async () => {
   await Promise.all([syncMonitors(), syncAutostart()]);
+  await reminderStore.fetchReminders();
 
   if (isTauriEnvironment) {
     unlistenMonitors = await onMonitorUpdate((payload) => {
@@ -259,6 +307,9 @@ onMounted(async () => {
     unlistenAutostart = await onAutostartUpdate((payload) => {
       petStore.setAutostart(Boolean(payload));
     });
+
+    unlistenReminderFired = await onReminderFired((payload) => handleReminderFired(payload));
+    unlistenReminderUpdated = await onReminderUpdated(() => reminderStore.fetchReminders());
   }
 
   updateMotionState();
@@ -270,6 +321,8 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   unlistenMonitors?.();
   unlistenAutostart?.();
+  unlistenReminderFired?.();
+  unlistenReminderUpdated?.();
   if (reminderTimer) clearTimeout(reminderTimer);
 });
 
@@ -314,6 +367,47 @@ watch(
       <div v-if="petStore.reminderActive" class="reminder-pulse" />
     </div>
 
+    <button class="reminder-toggle" type="button" @click.stop="toggleReminderPanel">
+      {{ showReminderPanel ? "收起提醒" : "提醒面板" }}
+    </button>
+
+    <section v-if="showReminderPanel" class="reminder-panel">
+      <form class="reminder-form" @submit.prevent="handleReminderSubmit">
+        <input
+          v-model="reminderStore.composer.title"
+          type="text"
+          placeholder="提醒标题"
+          required
+        />
+        <textarea
+          v-model="reminderStore.composer.message"
+          rows="2"
+          placeholder="备注（可选）"
+        />
+        <input
+          v-model="reminderStore.composer.remindAt"
+          type="datetime-local"
+          required
+        />
+        <button type="submit" :disabled="reminderStore.submitting">保存提醒</button>
+        <p v-if="reminderError" class="reminder-error">{{ reminderError }}</p>
+      </form>
+      <ul class="reminder-list">
+        <li v-for="item in reminderStore.items" :key="item.id">
+          <div class="reminder-info">
+            <strong>{{ item.title }}</strong>
+            <small>{{ formatRemindTime(item.remind_at) }}</small>
+            <p v-if="item.message">{{ item.message }}</p>
+          </div>
+          <div class="reminder-actions">
+            <button type="button" @click="handleComplete(item.id)">完成</button>
+            <button type="button" @click="handleSnooze(item.id)">+5分钟</button>
+            <button type="button" @click="handleDelete(item.id)">删除</button>
+          </div>
+        </li>
+        <li v-if="!reminderStore.items.length" class="placeholder">暂无提醒</li>
+      </ul>
+    </section>
   </div>
 </template>
 
@@ -371,6 +465,120 @@ watch(
   pointer-events: none;
   user-select: none;
   filter: drop-shadow(0 8px 12px rgba(29, 34, 58, 0.45));
+}
+
+.reminder-toggle {
+  position: absolute;
+  right: 12px;
+  bottom: 16px;
+  border: none;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  background: rgba(255, 255, 255, 0.15);
+  color: #fdfdfd;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.reminder-toggle:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.reminder-panel {
+  position: absolute;
+  top: 210px;
+  right: 0;
+  width: 240px;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(10, 10, 15, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 15px 35px rgba(0, 0, 0, 0.35);
+  color: #fdfdfd;
+  backdrop-filter: blur(18px);
+  z-index: 2;
+}
+
+.reminder-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.reminder-form input,
+.reminder-form textarea {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.reminder-form button {
+  align-self: flex-end;
+  border: none;
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: rgba(45, 229, 189, 0.8);
+  color: #081316;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.reminder-error {
+  color: #ff9696;
+  font-size: 11px;
+}
+
+.reminder-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.reminder-list li {
+  border-radius: 12px;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.reminder-info strong {
+  font-size: 13px;
+}
+
+.reminder-info small {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.reminder-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.reminder-actions button {
+  flex: 1;
+  border: none;
+  border-radius: 8px;
+  padding: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.12);
+  color: inherit;
 }
 
 .pet-face {

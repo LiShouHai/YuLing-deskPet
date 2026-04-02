@@ -85,3 +85,41 @@ export async function onAutostartUpdate(callback) {
     callback(event.payload);
   });
 }
+
+/**
+ * 提醒相关命令封装
+ */
+export async function createReminder(payload) {
+  if (!isTauriEnvironment) return null;
+  return invoke("reminder_create", { payload });
+}
+
+export async function listReminders() {
+  if (!isTauriEnvironment) return [];
+  return invoke("reminder_list");
+}
+
+export async function completeReminder(id) {
+  if (!isTauriEnvironment) return false;
+  return invoke("reminder_complete", { payload: { id } });
+}
+
+export async function deleteReminder(id) {
+  if (!isTauriEnvironment) return false;
+  return invoke("reminder_delete", { payload: { id } });
+}
+
+export async function snoozeReminder(id, remindAt) {
+  if (!isTauriEnvironment) return null;
+  return invoke("reminder_snooze", { payload: { id, remind_at: remindAt } });
+}
+
+export async function onReminderFired(callback) {
+  if (!isTauriEnvironment) return noopUnlisten;
+  return listen("reminder:fired", (event) => callback(event.payload));
+}
+
+export async function onReminderUpdated(callback) {
+  if (!isTauriEnvironment) return noopUnlisten;
+  return listen("reminder:updated", (event) => callback(event.payload));
+}

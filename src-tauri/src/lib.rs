@@ -3,6 +3,8 @@
 //! - 系统托盘初始化与事件处理
 //! - 监视器轮询广播，保证多屏信息实时刷新
 
+mod reminder;
+
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tauri::{
@@ -238,6 +240,8 @@ pub fn run() {
             let handle = app.handle();
             start_monitor_broadcast(handle.clone()); // 启动屏幕轮询
             init_tray(&handle)?; // 建立托盘与菜单
+            reminder::init_database(&handle)?;
+            reminder::start_scheduler(handle.clone());
             Ok(())
         })
         .plugin(tauri_plugin_autostart::init(
@@ -250,8 +254,50 @@ pub fn run() {
             platform_logical_to_physical,
             platform_physical_to_logical,
             platform_set_autostart,
-            platform_get_autostart
+            platform_get_autostart,
+            reminder_create,
+            reminder_list,
+            reminder_complete,
+            reminder_delete,
+            reminder_snooze
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[tauri::command]
+async fn reminder_create(
+    app: AppHandle,
+    payload: reminder::ReminderInput,
+) -> Result<reminder::ReminderRecord, String> {
+    reminder::create_reminder(app, payload).await
+}
+
+#[tauri::command]
+async fn reminder_list(app: AppHandle) -> Result<Vec<reminder::ReminderRecord>, String> {
+    reminder::list_reminders(app).await
+}
+
+#[tauri::command]
+async fn reminder_complete(
+    app: AppHandle,
+    payload: reminder::ReminderIdPayload,
+) -> Result<bool, String> {
+    reminder::complete_reminder(app, payload).await
+}
+
+#[tauri::command]
+async fn reminder_delete(
+    app: AppHandle,
+    payload: reminder::ReminderIdPayload,
+) -> Result<bool, String> {
+    reminder::delete_reminder(app, payload).await
+}
+
+#[tauri::command]
+async fn reminder_snooze(
+    app: AppHandle,
+    payload: reminder::ReminderSnoozePayload,
+) -> Result<reminder::ReminderRecord, String> {
+    reminder::snooze_reminder(app, payload).await
 }
