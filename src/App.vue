@@ -39,22 +39,22 @@ const tauriWindow = isTauriEnvironment ? getCurrentWindow() : null;
 const monitors = computed(() => petStore.monitors);
 const powerMode = computed(() => petStore.powerMode);
 // MotionController 提供当前动画状态、覆盖层强度以及状态 setter
-const { state: motionState, overlayIntensity, frame, setState } = useMotionController(powerMode);
+const { state: motionState, overlayIntensity, setState } = useMotionController(powerMode);
 
 let unlistenMonitors = null;
 let unlistenAutostart = null;
 let reminderTimer = null;
 
-const frameProgress = computed(() => (frame.value % 100) / 100);
+const idleFrames = motionManifest.idle?.frames ?? [];
+const manualFrameIndex = ref(0);
 
 /**
  * 解析当前状态对应的帧图片
  */
 const currentFrameSrc = computed(() => {
-  const stateConfig = motionManifest[motionState.value] ?? motionManifest.idle;
-  const frames = stateConfig?.frames ?? [];
+  const frames = idleFrames;
   if (!frames.length) return "";
-  const index = Math.floor(frameProgress.value * frames.length) % frames.length;
+  const index = manualFrameIndex.value % frames.length;
   const path = frames[index];
   return frameUrlMap[path] ?? "";
 });
@@ -168,6 +168,9 @@ function updateMotionState() {
  * 点击宠物时给一次短暂的 react 动画
  */
 function handleAvatarClick() {
+  if (idleFrames.length > 1) {
+    manualFrameIndex.value = (manualFrameIndex.value + 1) % idleFrames.length;
+  }
   setState("react");
   setTimeout(() => updateMotionState(), 500);
 }
