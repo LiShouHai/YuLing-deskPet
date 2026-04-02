@@ -78,6 +78,8 @@ export function useMotionController(powerModeRef) {
     }
     state.value = next;
     effectiveFps.value = manifest[next]?.fps ?? 24;
+    frame.value = 0;
+    last = 0;
   };
 
   // 监听电源模式，低功耗时强制帧率不超过 12fps

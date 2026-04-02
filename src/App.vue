@@ -18,6 +18,7 @@ import {
 } from "./platformBridge";
 import { usePetStore } from "./stores/petStore";
 import { useMotionController } from "./motion/useMotionController";
+import motionManifest from "./assets/motion/manifest.json";
 
 // Pinia store 承载跨组件共享状态
 const petStore = usePetStore();
@@ -29,11 +30,25 @@ const showControlPanel = ref(true);
 const monitors = computed(() => petStore.monitors);
 const powerMode = computed(() => petStore.powerMode);
 // MotionController 提供当前动画状态、覆盖层强度以及状态 setter
-const { state: motionState, overlayIntensity, setState } = useMotionController(powerMode);
+const { state: motionState, overlayIntensity, frame, setState } = useMotionController(powerMode);
 
 let unlistenMonitors = null;
 let unlistenAutostart = null;
 let reminderTimer = null;
+
+const frameProgress = computed(() => (frame.value % 100) / 100);
+
+/**
+ * 解析当前状态对应的帧图片
+ */
+const currentFrameSrc = computed(() => {
+  const stateConfig = motionManifest[motionState.value] ?? motionManifest.idle;
+  const frames = stateConfig?.frames ?? [];
+  if (!frames.length) return "";
+  const index = Math.floor(frameProgress.value * frames.length) % frames.length;
+  const path = frames[index];
+  return new URL(`./assets/motion/${path}`, import.meta.url).href;
+});
 
 /**
  * 将监视器对象转换为简短的显示文案
@@ -273,14 +288,23 @@ watch(
       @pointerdown="beginDrag"
       @click="handleAvatarClick"
     >
-      <!-- 基于几何拼贴构建的临时角色 -->
-      <div class="pet-body">
-        <div class="pet-face">
-          <span class="eye left" />
-          <span class="eye right" />
-          <span class="mouth" />
-        </div>
-        <div class="pet-tail" />
+      <!-- 角色主体：优先展示帧动画，若无素材则回退到几何拼贴 -->
+      <div class="pet-body" :class="{ 'has-frame': Boolean(currentFrameSrc) }">
+        <img
+          v-if="currentFrameSrc"
+          class="pet-frame"
+          :src="currentFrameSrc"
+          alt="隅灵动画帧"
+          draggable="false"
+        />
+        <template v-else>
+          <div class="pet-face">
+            <span class="eye left" />
+            <span class="eye right" />
+            <span class="mouth" />
+          </div>
+          <div class="pet-tail" />
+        </template>
       </div>
       <div v-if="petStore.reminderActive" class="reminder-pulse" />
     </div>
@@ -363,6 +387,21 @@ watch(
   background: radial-gradient(circle at 30% 30%, #fdfdfd, #b0b8ff);
   position: relative;
   animation: float 4s ease-in-out infinite;
+}
+
+.pet-body.has-frame {
+  background: transparent;
+  border-radius: 50%;
+  animation: float 4s ease-in-out infinite;
+}
+
+.pet-frame {
+  width: 120px;
+  height: 120px;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+  filter: drop-shadow(0 8px 12px rgba(29, 34, 58, 0.45));
 }
 
 .pet-face {

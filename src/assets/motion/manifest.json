@@ -1,7 +1,58 @@
 {
-  "idle": { "fps": 24, "loop": true, "interruptible": true },
-  "react": { "fps": 18, "loop": false, "interruptible": true, "duration": 900 },
-  "drag": { "fps": 30, "loop": true, "interruptible": false },
-  "sleep": { "fps": 8, "loop": true, "interruptible": true },
-  "reminderPulse": { "fps": 12, "loop": true, "interruptible": true }
+  "idle": {
+    "fps": 12,
+    "loop": true,
+    "interruptible": true,
+    "frames": [
+      "frames/idle_01.png",
+      "frames/idle_02.png",
+      "frames/idle_03.png",
+      "frames/idle_04.png"
+    ]
+  },
+  "react": {
+    "fps": 18,
+    "loop": false,
+    "interruptible": true,
+    "duration": 900,
+    "frames": [
+      "frames/idle_01.png",
+      "frames/idle_02.png",
+      "frames/idle_03.png",
+      "frames/idle_04.png"
+    ]
+  },
+  "drag": {
+    "fps": 30,
+    "loop": true,
+    "interruptible": false,
+    "frames": [
+      "frames/idle_01.png",
+      "frames/idle_02.png",
+      "frames/idle_03.png",
+      "frames/idle_04.png"
+    ]
+  },
+  "sleep": {
+    "fps": 8,
+    "loop": true,
+    "interruptible": true,
+    "frames": [
+      "frames/idle_01.png",
+      "frames/idle_02.png",
+      "frames/idle_03.png",
+      "frames/idle_04.png"
+    ]
+  },
+  "reminderPulse": {
+    "fps": 12,
+    "loop": true,
+    "interruptible": true,
+    "frames": [
+      "frames/idle_01.png",
+      "frames/idle_02.png",
+      "frames/idle_03.png",
+      "frames/idle_04.png"
+    ]
+  }
 }
