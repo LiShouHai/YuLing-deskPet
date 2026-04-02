@@ -7,7 +7,7 @@
  * 由于采用 `<script setup>`，声明即导出，需保持结构清晰。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
-import { getCurrentWindow, LogicalPosition } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
 import {
   fetchMonitors,
   getAutostartStatus,
@@ -68,6 +68,9 @@ const isPanelDragging = ref(false);
 const resizeHandles = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
 const reminderError = ref("");
 let bubbleTimer = null;
+let overlayActivationTimer = null;
+const REMINDER_WINDOW_SIZE = { width: 560, height: 520 };
+let originalWindowBounds = null;
 const handleKeydown = (event) => {
   if (event.key === "Escape" && showReminderModal.value) {
     closeReminderModal();
@@ -249,10 +252,15 @@ function handleReminderFired(payload) {
   }, 6000);
 }
 
-function closeReminderModal() {
+async function closeReminderModal() {
   showReminderModal.value = false;
   overlayInteractive.value = false;
   isPanelDragging.value = false;
+  if (overlayActivationTimer) {
+    clearTimeout(overlayActivationTimer);
+    overlayActivationTimer = null;
+  }
+  await restoreWindowBounds();
 }
 
 function clampPanelWithinViewport() {
@@ -280,6 +288,11 @@ function resetReminderPanel() {
 }
 
 async function openReminderModal() {
+  if (overlayActivationTimer) {
+    clearTimeout(overlayActivationTimer);
+    overlayActivationTimer = null;
+  }
+  await expandWindowForModal();
   resetReminderPanel();
   showReminderModal.value = true;
   overlayInteractive.value = false;
@@ -287,7 +300,9 @@ async function openReminderModal() {
   centerReminderPanel();
   if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
     window.requestAnimationFrame(() => {
-      overlayInteractive.value = true;
+      overlayActivationTimer = window.setTimeout(() => {
+        overlayInteractive.value = true;
+      }, 150);
     });
   } else {
     overlayInteractive.value = true;
@@ -372,6 +387,32 @@ function beginPanelResize(event, direction) {
 
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", up, { once: true });
+}
+
+async function expandWindowForModal() {
+  if (!tauriWindow || !isTauriEnvironment) return;
+  if (!originalWindowBounds) {
+    const scaleFactor = await tauriWindow.scaleFactor();
+    const [size, position] = await Promise.all([tauriWindow.outerSize(), tauriWindow.outerPosition()]);
+    originalWindowBounds = {
+      size: size.toLogical(scaleFactor),
+      position: position.toLogical(scaleFactor),
+    };
+  }
+  await tauriWindow.setSize(new LogicalSize(REMINDER_WINDOW_SIZE.width, REMINDER_WINDOW_SIZE.height));
+  await tauriWindow.center();
+}
+
+async function restoreWindowBounds() {
+  if (!tauriWindow || !originalWindowBounds) return;
+  const { size, position } = originalWindowBounds;
+  originalWindowBounds = null;
+  try {
+    await tauriWindow.setSize(new LogicalSize(size.width, size.height));
+    await tauriWindow.setPosition(new LogicalPosition(position.x, position.y));
+  } catch (error) {
+    console.warn("恢复窗口尺寸失败", error);
+  }
 }
 
 /**
