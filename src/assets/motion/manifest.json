@@ -1,6 +1,6 @@
 {
   "idle": {
-    "fps": 12,
+    "fps": 2.5,
     "loop": true,
     "interruptible": true,
     "frames": [
