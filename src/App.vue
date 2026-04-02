@@ -42,8 +42,6 @@ const tauriWindow = isTauriEnvironment ? getCurrentWindow() : null;
 // 通过计算属性获取监视器列表和电源模式，保持响应式
 const monitors = computed(() => petStore.monitors);
 const powerMode = computed(() => petStore.powerMode);
-const showReminderPanel = ref(false);
-const reminderError = ref("");
 // MotionController 提供当前动画状态、覆盖层强度以及状态 setter
 const { state: motionState, overlayIntensity, setState } = useMotionController(powerMode);
 
@@ -52,6 +50,8 @@ let unlistenAutostart = null;
 let reminderTimer = null;
 let unlistenReminderFired = null;
 let unlistenReminderUpdated = null;
+const showBubble = ref(false);
+let bubbleTimer = null;
 
 const idleFrames = motionManifest.idle?.frames ?? [];
 const manualFrameIndex = ref(0);
@@ -186,40 +186,16 @@ function handleAvatarClick() {
 /**
  * 切换提醒面板
  */
-function toggleReminderPanel() {
-  showReminderPanel.value = !showReminderPanel.value;
-}
-
-function formatRemindTime(timestamp) {
-  return new Date(timestamp).toLocaleString();
-}
-
-async function handleReminderSubmit() {
-  reminderError.value = "";
-  try {
-    await reminderStore.addReminder();
-  } catch (error) {
-    reminderError.value = error?.message ?? "创建提醒失败";
-  }
-}
-
-async function handleComplete(id) {
-  await reminderStore.complete(id);
-}
-
-async function handleSnooze(id) {
-  await reminderStore.snooze(id, 5 * 60 * 1000);
-}
-
-async function handleDelete(id) {
-  await reminderStore.remove(id);
-}
-
 function handleReminderFired(payload) {
   reminderStore.markFired(payload);
   petStore.pulseReminder(true);
   if (reminderTimer) clearTimeout(reminderTimer);
   reminderTimer = setTimeout(() => petStore.pulseReminder(false), 5000);
+  showBubble.value = true;
+  if (bubbleTimer) clearTimeout(bubbleTimer);
+  bubbleTimer = setTimeout(() => {
+    showBubble.value = false;
+  }, 6000);
 }
 
 /**
@@ -324,6 +300,7 @@ onBeforeUnmount(() => {
   unlistenReminderFired?.();
   unlistenReminderUpdated?.();
   if (reminderTimer) clearTimeout(reminderTimer);
+  if (bubbleTimer) clearTimeout(bubbleTimer);
 });
 
 // 监听关键状态，变化时更新动画状态
@@ -337,6 +314,15 @@ watch(
 <template>
   <div class="pet-shell">
     <div class="pet-stage">
+      <Transition name="bubble">
+        <div v-if="showBubble && reminderStore.lastFired" class="reminder-bubble">
+          <p class="bubble-label">提醒</p>
+          <p class="bubble-title">{{ reminderStore.lastFired.title }}</p>
+          <p class="bubble-body">
+            {{ reminderStore.lastFired.message || "记得活动一下身体～" }}
+          </p>
+        </div>
+      </Transition>
       <div
         class="pet-avatar"
         :class="[`state-${motionState}`, { dragging: petStore.dragging }]"
@@ -365,75 +351,7 @@ watch(
         </div>
         <div v-if="petStore.reminderActive" class="reminder-pulse" />
       </div>
-      <div v-if="reminderStore.lastFired" class="reminder-toast">
-        <p class="toast-label">最新提醒</p>
-        <p class="toast-title">{{ reminderStore.lastFired.title }}</p>
-        <small>{{ reminderStore.lastFired.message || "保持好状态～" }}</small>
-      </div>
-      <button class="pill-button" type="button" @click="toggleReminderPanel">
-        {{ showReminderPanel ? "收起提醒" : "展开提醒" }}
-      </button>
     </div>
-
-    <Transition name="sheet">
-      <section v-if="showReminderPanel" class="reminder-panel">
-        <header class="panel-header">
-          <div>
-            <p class="panel-label">提醒计划</p>
-            <h2>{{ reminderStore.items.length || "0" }} 项任务</h2>
-          </div>
-          <button class="icon-btn" type="button" @click="toggleReminderPanel" aria-label="收起">
-            ✕
-          </button>
-        </header>
-        <form class="reminder-form" @submit.prevent="handleReminderSubmit">
-          <label class="field">
-            <span>提醒标题</span>
-            <input
-              v-model="reminderStore.composer.title"
-              type="text"
-              placeholder="如：喝水、伸展"
-              required
-            />
-          </label>
-          <label class="field">
-            <span>备注（可选）</span>
-            <textarea
-              v-model="reminderStore.composer.message"
-              rows="2"
-              placeholder="补充提示语"
-            />
-          </label>
-          <label class="field">
-            <span>提醒时间</span>
-            <input
-              v-model="reminderStore.composer.remindAt"
-              type="datetime-local"
-              required
-            />
-          </label>
-          <button class="primary-btn" type="submit" :disabled="reminderStore.submitting">
-            {{ reminderStore.submitting ? "保存中…" : "保存提醒" }}
-          </button>
-          <p v-if="reminderError" class="reminder-error">{{ reminderError }}</p>
-        </form>
-        <ul class="reminder-list">
-          <li v-for="item in reminderStore.items" :key="item.id">
-            <div class="reminder-info">
-              <strong>{{ item.title }}</strong>
-              <small>{{ formatRemindTime(item.remind_at) }}</small>
-              <p v-if="item.message">{{ item.message }}</p>
-            </div>
-            <div class="reminder-actions">
-              <button type="button" @click="handleComplete(item.id)">完成</button>
-              <button type="button" @click="handleSnooze(item.id)">延后5分</button>
-              <button type="button" @click="handleDelete(item.id)">删除</button>
-            </div>
-          </li>
-          <li v-if="!reminderStore.items.length" class="placeholder">暂无提醒，来创建一条吧。</li>
-        </ul>
-      </section>
-    </Transition>
   </div>
 </template>
 
@@ -442,14 +360,14 @@ watch(
   position: relative;
   width: 100%;
   height: 100%;
-  min-width: 300px;
-  min-height: 360px;
-  padding: 20px;
+  min-width: 260px;
+  min-height: 320px;
+  padding: 16px;
   box-sizing: border-box;
   user-select: none;
   display: flex;
-  flex-direction: column;
-  gap: 18px;
+  align-items: center;
+  justify-content: center;
   background: transparent;
 }
 
@@ -458,12 +376,12 @@ watch(
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
-  padding: 12px;
-  border-radius: 24px;
-  background: radial-gradient(circle at top, rgba(34, 57, 91, 0.35), rgba(6, 10, 16, 0.9));
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 20px 60px rgba(5, 6, 11, 0.65);
+  gap: 16px;
+  padding: 18px;
+  border-radius: 32px;
+  background: radial-gradient(circle at top, rgba(34, 57, 91, 0.45), rgba(6, 10, 16, 0.92));
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: 0 20px 60px rgba(5, 6, 11, 0.7);
   backdrop-filter: blur(18px);
 }
 
@@ -508,160 +426,6 @@ watch(
   user-select: none;
   filter: drop-shadow(0 8px 12px rgba(29, 34, 58, 0.45));
   margin: 0 auto;
-}
-
-.reminder-panel {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  top: calc(100% - 20px);
-  width: 260px;
-  max-height: 320px;
-  padding: 14px;
-  border-radius: 20px;
-  background: rgba(9, 11, 18, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  box-shadow: 0 25px 55px rgba(5, 6, 11, 0.65);
-  color: #fdfdfd;
-  backdrop-filter: blur(20px);
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  z-index: 10;
-  padding-top: 18px;
-}
-
-.panel-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-}
-
-.panel-label {
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.2em;
-  opacity: 0.6;
-}
-
-.panel-header h2 {
-  margin: 4px 0 0;
-  font-size: 24px;
-  font-weight: 600;
-}
-
-.icon-btn {
-  border: none;
-  width: 28px;
-  height: 28px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
-  color: inherit;
-  cursor: pointer;
-}
-
-.pill-button {
-  border: none;
-  border-radius: 999px;
-  padding: 4px 14px;
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  background: rgba(255, 255, 255, 0.15);
-  color: #fdfdfd;
-  cursor: pointer;
-  transition: background 0.2s ease;
-}
-
-.pill-button:hover {
-  background: rgba(255, 255, 255, 0.25);
-}
-
-.reminder-form {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 10px;
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.75);
-}
-
-.field input,
-.field textarea {
-  width: 100%;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  background: rgba(255, 255, 255, 0.05);
-  color: inherit;
-  padding: 6px 8px;
-  font-size: 12px;
-}
-
-.primary-btn {
-  align-self: flex-end;
-  border: none;
-  border-radius: 999px;
-  padding: 4px 10px;
-  background: linear-gradient(120deg, #f97316, #fbbf24);
-  color: #0b0d11;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.reminder-error {
-  color: #ff9696;
-  font-size: 11px;
-}
-
-.reminder-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-height: 140px;
-  overflow-y: auto;
-}
-
-.reminder-list li {
-  border-radius: 12px;
-  padding: 8px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.reminder-info strong {
-  font-size: 13px;
-}
-
-.reminder-info small {
-  font-size: 11px;
-  opacity: 0.7;
-}
-
-.reminder-actions {
-  display: flex;
-  gap: 6px;
-}
-
-.reminder-actions button {
-  flex: 1;
-  border: none;
-  border-radius: 8px;
-  padding: 4px;
-  font-size: 11px;
-  cursor: pointer;
-  background: rgba(255, 255, 255, 0.12);
-  color: inherit;
 }
 
 .pet-face {
@@ -714,6 +478,62 @@ watch(
   animation: pulse 1.6s ease-in-out infinite;
 }
 
+.reminder-bubble {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translate(-50%, -110%);
+  width: 220px;
+  padding: 12px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.95);
+  color: #0d1220;
+  box-shadow: 0 16px 40px rgba(5, 6, 11, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+}
+
+.reminder-bubble::after {
+  content: "";
+  position: absolute;
+  bottom: -8px;
+  left: 50%;
+  transform: translateX(-50%) rotate(45deg);
+  width: 16px;
+  height: 16px;
+  background: inherit;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.6);
+  border-right: 1px solid rgba(255, 255, 255, 0.6);
+}
+
+.bubble-label {
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: #475569;
+}
+
+.bubble-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 4px 0;
+}
+
+.bubble-body {
+  font-size: 13px;
+  opacity: 0.8;
+}
+
+.bubble-enter-active,
+.bubble-leave-active {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.bubble-enter-from,
+.bubble-leave-to {
+  opacity: 0;
+  transform: translate(-50%, -120%) scale(0.92);
+}
+
 @keyframes float {
   0%,
   100% {
@@ -735,6 +555,7 @@ watch(
   }
 }
 </style>
+
 .sheet-enter-active,
 .sheet-leave-active {
   transition: opacity 0.25s ease, transform 0.25s ease;
