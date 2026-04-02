@@ -6,7 +6,7 @@
  * - 驱动 MotionController 控制宠物动画
  * 由于采用 `<script setup>`，声明即导出，需保持结构清晰。
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { getCurrentWindow, LogicalPosition } from "@tauri-apps/api/window";
 import {
   fetchMonitors,
@@ -54,8 +54,30 @@ let unlistenReminderUpdated = null;
 let unlistenReminderToggle = null;
 const showBubble = ref(false);
 const showReminderModal = ref(false);
+const overlayInteractive = ref(false);
+const PANEL_DEFAULT = { width: 360, height: 420 };
+const PANEL_MIN = { width: 320, height: 260 };
+const PANEL_MARGIN = 12;
+const reminderPanelRect = reactive({
+  width: PANEL_DEFAULT.width,
+  height: PANEL_DEFAULT.height,
+  top: PANEL_MARGIN,
+  left: PANEL_MARGIN,
+});
+const isPanelDragging = ref(false);
+const resizeHandles = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
 const reminderError = ref("");
 let bubbleTimer = null;
+const handleKeydown = (event) => {
+  if (event.key === "Escape" && showReminderModal.value) {
+    closeReminderModal();
+  }
+};
+const handleWindowResize = () => {
+  if (showReminderModal.value) {
+    clampPanelWithinViewport();
+  }
+};
 
 const idleFrames = motionManifest.idle?.frames ?? [];
 const manualFrameIndex = ref(0);
@@ -229,6 +251,127 @@ function handleReminderFired(payload) {
 
 function closeReminderModal() {
   showReminderModal.value = false;
+  overlayInteractive.value = false;
+  isPanelDragging.value = false;
+}
+
+function clampPanelWithinViewport() {
+  if (typeof window === "undefined") return;
+  const vw = Math.max(window.innerWidth || 0, PANEL_MIN.width + PANEL_MARGIN * 2);
+  const vh = Math.max(window.innerHeight || 0, PANEL_MIN.height + PANEL_MARGIN * 2);
+  const maxLeft = Math.max(vw - reminderPanelRect.width - PANEL_MARGIN, PANEL_MARGIN);
+  const maxTop = Math.max(vh - reminderPanelRect.height - PANEL_MARGIN, PANEL_MARGIN);
+  reminderPanelRect.left = Math.min(Math.max(reminderPanelRect.left, PANEL_MARGIN), maxLeft);
+  reminderPanelRect.top = Math.min(Math.max(reminderPanelRect.top, PANEL_MARGIN), maxTop);
+}
+
+function centerReminderPanel() {
+  if (typeof window === "undefined") return;
+  const vw = window.innerWidth || reminderPanelRect.width;
+  const vh = window.innerHeight || reminderPanelRect.height;
+  reminderPanelRect.left = Math.max((vw - reminderPanelRect.width) / 2, PANEL_MARGIN);
+  reminderPanelRect.top = Math.max((vh - reminderPanelRect.height) / 2, PANEL_MARGIN);
+}
+
+function resetReminderPanel() {
+  reminderPanelRect.width = PANEL_DEFAULT.width;
+  reminderPanelRect.height = PANEL_DEFAULT.height;
+  centerReminderPanel();
+}
+
+async function openReminderModal() {
+  resetReminderPanel();
+  showReminderModal.value = true;
+  overlayInteractive.value = false;
+  await nextTick();
+  centerReminderPanel();
+  if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+    window.requestAnimationFrame(() => {
+      overlayInteractive.value = true;
+    });
+  } else {
+    overlayInteractive.value = true;
+  }
+}
+
+function beginPanelDrag(event) {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  isPanelDragging.value = true;
+  const startPointer = { x: event.clientX, y: event.clientY };
+  const startRect = { left: reminderPanelRect.left, top: reminderPanelRect.top };
+
+  const move = (moveEvent) => {
+    const dx = moveEvent.clientX - startPointer.x;
+    const dy = moveEvent.clientY - startPointer.y;
+    reminderPanelRect.left = startRect.left + dx;
+    reminderPanelRect.top = startRect.top + dy;
+    clampPanelWithinViewport();
+  };
+
+  const up = () => {
+    isPanelDragging.value = false;
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+  };
+
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up, { once: true });
+}
+
+function handleHeaderPointerDown(event) {
+  const target = event.target;
+  if (target && typeof target.closest === "function") {
+    if (target.closest("button")) {
+      return;
+    }
+  }
+  beginPanelDrag(event);
+}
+
+function beginPanelResize(event, direction) {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  const startPointer = { x: event.clientX, y: event.clientY };
+  const startRect = {
+    width: reminderPanelRect.width,
+    height: reminderPanelRect.height,
+    left: reminderPanelRect.left,
+    top: reminderPanelRect.top,
+  };
+
+  const move = (moveEvent) => {
+    const dx = moveEvent.clientX - startPointer.x;
+    const dy = moveEvent.clientY - startPointer.y;
+
+    if (direction.includes("e")) {
+      reminderPanelRect.width = Math.max(PANEL_MIN.width, startRect.width + dx);
+    }
+    if (direction.includes("s")) {
+      reminderPanelRect.height = Math.max(PANEL_MIN.height, startRect.height + dy);
+    }
+    if (direction.includes("w")) {
+      const nextWidth = Math.max(PANEL_MIN.width, startRect.width - dx);
+      const delta = startRect.width - nextWidth;
+      reminderPanelRect.width = nextWidth;
+      reminderPanelRect.left = startRect.left + delta;
+    }
+    if (direction.includes("n")) {
+      const nextHeight = Math.max(PANEL_MIN.height, startRect.height - dy);
+      const delta = startRect.height - nextHeight;
+      reminderPanelRect.height = nextHeight;
+      reminderPanelRect.top = startRect.top + delta;
+    }
+    clampPanelWithinViewport();
+  };
+
+  const up = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+  };
+
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up, { once: true });
 }
 
 /**
@@ -308,6 +451,11 @@ onMounted(async () => {
   await Promise.all([syncMonitors(), syncAutostart()]);
   await reminderStore.fetchReminders();
 
+  if (typeof window !== "undefined") {
+    window.addEventListener("keydown", handleKeydown);
+    window.addEventListener("resize", handleWindowResize);
+  }
+
   if (isTauriEnvironment) {
     unlistenMonitors = await onMonitorUpdate((payload) => {
       petStore.setMonitors(payload ?? []);
@@ -321,7 +469,7 @@ onMounted(async () => {
     unlistenReminderUpdated = await onReminderUpdated(() => reminderStore.fetchReminders());
     unlistenReminderToggle = await onReminderToggle(() => {
       console.info("收到托盘提醒列表事件，开启提醒面板");
-      showReminderModal.value = true;
+      openReminderModal();
     });
   }
 
@@ -339,6 +487,10 @@ onBeforeUnmount(() => {
   unlistenReminderToggle?.();
   if (reminderTimer) clearTimeout(reminderTimer);
   if (bubbleTimer) clearTimeout(bubbleTimer);
+  if (typeof window !== "undefined") {
+    window.removeEventListener("keydown", handleKeydown);
+    window.removeEventListener("resize", handleWindowResize);
+  }
 });
 
 // 监听关键状态，变化时更新动画状态
@@ -394,15 +546,30 @@ watch(
       <div
         v-if="showReminderModal"
         class="reminder-overlay"
-        @click.self="closeReminderModal"
+        :class="{ 'is-live': overlayInteractive }"
+        @click.self="overlayInteractive && closeReminderModal()"
       >
-        <section class="reminder-modal">
-          <header class="modal-header">
+        <section
+          class="reminder-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="reminder-panel-title"
+          :class="{ dragging: isPanelDragging }"
+          :style="{
+            width: reminderPanelRect.width + 'px',
+            height: reminderPanelRect.height + 'px',
+            top: reminderPanelRect.top + 'px',
+            left: reminderPanelRect.left + 'px',
+          }"
+          @pointerdown.stop
+        >
+          <div class="modal-hero-bar" />
+          <header class="modal-header" @pointerdown="handleHeaderPointerDown">
             <div>
               <p class="modal-label">提醒列表</p>
-              <h3>{{ reminderStore.items.length || "0" }} 项任务</h3>
+              <h3 id="reminder-panel-title">{{ reminderStore.items.length || "0" }} 项任务</h3>
             </div>
-            <button type="button" class="icon-btn" @click="closeReminderModal" aria-label="关闭">
+            <button type="button" class="icon-btn" @click="closeReminderModal" aria-label="关闭提醒面板">
               ✕
             </button>
           </header>
@@ -452,6 +619,13 @@ watch(
             </li>
             <li v-if="!reminderStore.items.length" class="placeholder">暂无提醒，使用上方表单创建。</li>
           </ul>
+          <div
+            v-for="handle in resizeHandles"
+            :key="handle"
+            class="resize-handle"
+            :class="`handle-${handle}`"
+            @pointerdown.prevent="beginPanelResize($event, handle)"
+          />
         </section>
       </div>
     </Transition>
@@ -638,33 +812,55 @@ watch(
 .reminder-overlay {
   position: fixed;
   inset: 0;
-  padding: 24px;
-  background: rgba(4, 5, 8, 0.55);
-  backdrop-filter: blur(8px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  background: rgba(4, 6, 12, 0.6);
+  backdrop-filter: blur(14px) saturate(140%);
   z-index: 1200;
+  transition: opacity 0.25s ease;
+}
+
+.reminder-overlay:not(.is-live) {
+  pointer-events: none;
 }
 
 .reminder-modal {
-  width: min(360px, 90vw);
-  max-height: min(420px, 90vh);
-  padding: 20px;
-  border-radius: 20px;
-  background: rgba(8, 11, 18, 0.92);
+  position: absolute;
+  padding: 24px;
+  border-radius: 28px;
+  background: linear-gradient(180deg, rgba(18, 23, 37, 0.95), rgba(7, 10, 18, 0.98));
   border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 25px 55px rgba(2, 3, 6, 0.7);
+  box-shadow: 0 35px 80px rgba(2, 3, 6, 0.75);
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  overflow-y: auto;
+  gap: 14px;
+  overflow: hidden;
+  animation: reminder-pop 0.25s ease;
+  transition: box-shadow 0.2s ease;
+}
+
+.reminder-modal.dragging {
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.6);
+  cursor: grabbing;
+}
+
+.modal-hero-bar {
+  width: 60%;
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #f97316, #fbbf24, #60a5fa);
+  opacity: 0.9;
+  animation: hero-flow 0.4s ease forwards;
 }
 
 .modal-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
+  user-select: none;
+  cursor: grab;
+}
+
+.reminder-modal.dragging .modal-header {
+  cursor: grabbing;
 }
 
 .modal-label {
@@ -738,7 +934,7 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 150px;
+  flex: 1;
   overflow-y: auto;
 }
 
@@ -788,6 +984,75 @@ watch(
   transform: scale(0.96);
 }
 
+.resize-handle {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 6px 15px rgba(0, 0, 0, 0.35);
+}
+
+.resize-handle:hover {
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.handle-n,
+.handle-s {
+  left: 50%;
+  transform: translateX(-50%);
+  cursor: ns-resize;
+}
+
+.handle-n {
+  top: -8px;
+}
+
+.handle-s {
+  bottom: -8px;
+}
+
+.handle-e,
+.handle-w {
+  top: 50%;
+  transform: translateY(-50%);
+  cursor: ew-resize;
+}
+
+.handle-e {
+  right: -8px;
+}
+
+.handle-w {
+  left: -8px;
+}
+
+.handle-ne {
+  top: -8px;
+  right: -8px;
+  cursor: nesw-resize;
+}
+
+.handle-nw {
+  top: -8px;
+  left: -8px;
+  cursor: nwse-resize;
+}
+
+.handle-se {
+  bottom: -8px;
+  right: -8px;
+  cursor: nwse-resize;
+}
+
+.handle-sw {
+  bottom: -8px;
+  left: -8px;
+  cursor: nesw-resize;
+}
+
 @keyframes float {
   0%,
   100% {
@@ -806,6 +1071,28 @@ watch(
   100% {
     transform: scale(1.1);
     opacity: 0.2;
+  }
+}
+
+@keyframes reminder-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes hero-flow {
+  from {
+    width: 40%;
+    opacity: 0.4;
+  }
+  to {
+    width: 100%;
+    opacity: 1;
   }
 }
 </style>
