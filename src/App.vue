@@ -335,94 +335,134 @@ watch(
 </script>
 
 <template>
-  <!-- 根容器：仅展示宠物本体 -->
   <div class="pet-shell">
-    <div
-      class="pet-avatar"
-      :class="[`state-${motionState}`, { dragging: petStore.dragging }]"
-      :style="{
-        boxShadow: `0 25px 45px rgba(23, 25, 35, ${0.35 + overlayIntensity * 0.25})`,
-      }"
-      @pointerdown="beginDrag"
-      @click="handleAvatarClick"
-    >
-      <!-- 角色主体：优先展示帧动画，若无素材则回退到几何拼贴 -->
-      <div class="pet-body" :class="{ 'has-frame': Boolean(currentFrameSrc) }">
-        <img
-          v-if="currentFrameSrc"
-          class="pet-frame"
-          :src="currentFrameSrc"
-          alt="隅灵动画帧"
-          draggable="false"
-        />
-        <template v-else>
-          <div class="pet-face">
-            <span class="eye left" />
-            <span class="eye right" />
-            <span class="mouth" />
-          </div>
-          <div class="pet-tail" />
-        </template>
+    <div class="pet-stage">
+      <div
+        class="pet-avatar"
+        :class="[`state-${motionState}`, { dragging: petStore.dragging }]"
+        :style="{
+          boxShadow: `0 25px 45px rgba(23, 25, 35, ${0.35 + overlayIntensity * 0.25})`,
+        }"
+        @pointerdown="beginDrag"
+        @click="handleAvatarClick"
+      >
+        <div class="pet-body" :class="{ 'has-frame': Boolean(currentFrameSrc) }">
+          <img
+            v-if="currentFrameSrc"
+            class="pet-frame"
+            :src="currentFrameSrc"
+            alt="隅灵动画帧"
+            draggable="false"
+          />
+          <template v-else>
+            <div class="pet-face">
+              <span class="eye left" />
+              <span class="eye right" />
+              <span class="mouth" />
+            </div>
+            <div class="pet-tail" />
+          </template>
+        </div>
+        <div v-if="petStore.reminderActive" class="reminder-pulse" />
       </div>
-      <div v-if="petStore.reminderActive" class="reminder-pulse" />
+      <div v-if="reminderStore.lastFired" class="reminder-toast">
+        <p class="toast-label">最新提醒</p>
+        <p class="toast-title">{{ reminderStore.lastFired.title }}</p>
+        <small>{{ reminderStore.lastFired.message || "保持好状态～" }}</small>
+      </div>
+      <button class="pill-button" type="button" @click="toggleReminderPanel">
+        {{ showReminderPanel ? "收起提醒" : "展开提醒" }}
+      </button>
     </div>
 
-    <button class="reminder-toggle" type="button" @click.stop="toggleReminderPanel">
-      {{ showReminderPanel ? "收起提醒" : "提醒面板" }}
-    </button>
-
-    <section v-if="showReminderPanel" class="reminder-panel">
-      <form class="reminder-form" @submit.prevent="handleReminderSubmit">
-        <input
-          v-model="reminderStore.composer.title"
-          type="text"
-          placeholder="提醒标题"
-          required
-        />
-        <textarea
-          v-model="reminderStore.composer.message"
-          rows="2"
-          placeholder="备注（可选）"
-        />
-        <input
-          v-model="reminderStore.composer.remindAt"
-          type="datetime-local"
-          required
-        />
-        <button type="submit" :disabled="reminderStore.submitting">保存提醒</button>
-        <p v-if="reminderError" class="reminder-error">{{ reminderError }}</p>
-      </form>
-      <ul class="reminder-list">
-        <li v-for="item in reminderStore.items" :key="item.id">
-          <div class="reminder-info">
-            <strong>{{ item.title }}</strong>
-            <small>{{ formatRemindTime(item.remind_at) }}</small>
-            <p v-if="item.message">{{ item.message }}</p>
+    <Transition name="sheet">
+      <section v-show="showReminderPanel" class="reminder-panel">
+        <header class="panel-header">
+          <div>
+            <p class="panel-label">提醒计划</p>
+            <h2>{{ reminderStore.items.length || "0" }} 项任务</h2>
           </div>
-          <div class="reminder-actions">
-            <button type="button" @click="handleComplete(item.id)">完成</button>
-            <button type="button" @click="handleSnooze(item.id)">+5分钟</button>
-            <button type="button" @click="handleDelete(item.id)">删除</button>
-          </div>
-        </li>
-        <li v-if="!reminderStore.items.length" class="placeholder">暂无提醒</li>
-      </ul>
-    </section>
+          <button class="icon-btn" type="button" @click="toggleReminderPanel" aria-label="收起">
+            ✕
+          </button>
+        </header>
+        <form class="reminder-form" @submit.prevent="handleReminderSubmit">
+          <label class="field">
+            <span>提醒标题</span>
+            <input
+              v-model="reminderStore.composer.title"
+              type="text"
+              placeholder="如：喝水、伸展"
+              required
+            />
+          </label>
+          <label class="field">
+            <span>备注（可选）</span>
+            <textarea
+              v-model="reminderStore.composer.message"
+              rows="2"
+              placeholder="补充提示语"
+            />
+          </label>
+          <label class="field">
+            <span>提醒时间</span>
+            <input
+              v-model="reminderStore.composer.remindAt"
+              type="datetime-local"
+              required
+            />
+          </label>
+          <button class="primary-btn" type="submit" :disabled="reminderStore.submitting">
+            {{ reminderStore.submitting ? "保存中…" : "保存提醒" }}
+          </button>
+          <p v-if="reminderError" class="reminder-error">{{ reminderError }}</p>
+        </form>
+        <ul class="reminder-list">
+          <li v-for="item in reminderStore.items" :key="item.id">
+            <div class="reminder-info">
+              <strong>{{ item.title }}</strong>
+              <small>{{ formatRemindTime(item.remind_at) }}</small>
+              <p v-if="item.message">{{ item.message }}</p>
+            </div>
+            <div class="reminder-actions">
+              <button type="button" @click="handleComplete(item.id)">完成</button>
+              <button type="button" @click="handleSnooze(item.id)">延后5分</button>
+              <button type="button" @click="handleDelete(item.id)">删除</button>
+            </div>
+          </li>
+          <li v-if="!reminderStore.items.length" class="placeholder">暂无提醒，来创建一条吧。</li>
+        </ul>
+      </section>
+    </Transition>
   </div>
 </template>
 
 <style scoped>
 .pet-shell {
   position: relative;
-  width: 220px;
-  height: 220px;
-  padding: 20px;
+  width: 100%;
+  height: 100%;
+  min-width: 300px;
+  min-height: 360px;
+  padding: 20px 20px 16px;
   box-sizing: border-box;
   user-select: none;
   display: flex;
+  flex-direction: column;
+  gap: 18px;
+  background: radial-gradient(circle at top, rgba(34, 57, 91, 0.45), rgba(6, 10, 16, 0.85));
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 20px 60px rgba(5, 6, 11, 0.75);
+  backdrop-filter: blur(18px);
+}
+
+.pet-stage {
+  position: relative;
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  background: transparent;
+  gap: 12px;
 }
 
 .pet-avatar {
@@ -465,15 +505,57 @@ watch(
   pointer-events: none;
   user-select: none;
   filter: drop-shadow(0 8px 12px rgba(29, 34, 58, 0.45));
+  margin: 0 auto;
 }
 
-.reminder-toggle {
-  position: absolute;
-  right: 12px;
-  bottom: 16px;
+.reminder-panel {
+  flex: 1;
+  width: 100%;
+  padding: 16px;
+  border-radius: 20px;
+  background: rgba(12, 18, 28, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+  color: #fdfdfd;
+  backdrop-filter: blur(20px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.panel-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  opacity: 0.6;
+}
+
+.panel-header h2 {
+  margin: 4px 0 0;
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.icon-btn {
+  border: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  cursor: pointer;
+}
+
+.pill-button {
   border: none;
   border-radius: 999px;
-  padding: 4px 12px;
+  padding: 4px 14px;
   font-size: 12px;
   letter-spacing: 0.08em;
   background: rgba(255, 255, 255, 0.15);
@@ -482,23 +564,8 @@ watch(
   transition: background 0.2s ease;
 }
 
-.reminder-toggle:hover {
-  background: rgba(255, 255, 255, 0.3);
-}
-
-.reminder-panel {
-  position: absolute;
-  top: 210px;
-  right: 0;
-  width: 240px;
-  padding: 14px;
-  border-radius: 16px;
-  background: rgba(10, 10, 15, 0.78);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 15px 35px rgba(0, 0, 0, 0.35);
-  color: #fdfdfd;
-  backdrop-filter: blur(18px);
-  z-index: 2;
+.pill-button:hover {
+  background: rgba(255, 255, 255, 0.25);
 }
 
 .reminder-form {
@@ -508,8 +575,16 @@ watch(
   margin-bottom: 10px;
 }
 
-.reminder-form input,
-.reminder-form textarea {
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.field input,
+.field textarea {
   width: 100%;
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.15);
@@ -519,13 +594,13 @@ watch(
   font-size: 12px;
 }
 
-.reminder-form button {
+.primary-btn {
   align-self: flex-end;
   border: none;
   border-radius: 999px;
   padding: 4px 10px;
-  background: rgba(45, 229, 189, 0.8);
-  color: #081316;
+  background: linear-gradient(120deg, #f97316, #fbbf24);
+  color: #0b0d11;
   font-size: 12px;
   cursor: pointer;
 }
@@ -542,9 +617,9 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 200px;
+  flex: 1;
   overflow-y: auto;
-}
+  }
 
 .reminder-list li {
   border-radius: 12px;
@@ -652,3 +727,36 @@ watch(
   }
 }
 </style>
+.pet-shell .sheet-enter-active,
+.pet-shell .sheet-leave-active {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.pet-shell .sheet-enter-from,
+.pet-shell .sheet-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.reminder-toast {
+  width: 100%;
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(23, 32, 44, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  text-align: center;
+}
+
+.toast-label {
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  opacity: 0.6;
+  margin-bottom: 4px;
+}
+
+.toast-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
