@@ -14,6 +14,7 @@ import {
   isTauriEnvironment,
   onReminderFired,
   onReminderUpdated,
+  onReminderToggle,
   onAutostartUpdate,
   onMonitorUpdate,
   setAutostart,
@@ -459,11 +460,9 @@ watch(
 <style scoped>
 .pet-shell {
   position: relative;
-  width: 100%;
-  height: 100%;
-  min-width: 260px;
-  min-height: 320px;
-  padding: 16px;
+  width: 240px;
+  height: 240px;
+  padding: 20px;
   box-sizing: border-box;
   user-select: none;
   display: flex;
@@ -477,12 +476,14 @@ watch(
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 16px;
-  padding: 18px;
+  gap: 12px;
+  padding: 16px;
+  width: 200px;
+  height: 200px;
   border-radius: 32px;
   background: radial-gradient(circle at top, rgba(34, 57, 91, 0.45), rgba(6, 10, 16, 0.92));
   border: 1px solid rgba(255, 255, 255, 0.06);
-  box-shadow: 0 20px 60px rgba(5, 6, 11, 0.7);
+  box-shadow: 0 10px 30px rgba(5, 6, 11, 0.65);
   backdrop-filter: blur(18px);
 }
 
