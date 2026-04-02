@@ -50,7 +50,10 @@ let unlistenAutostart = null;
 let reminderTimer = null;
 let unlistenReminderFired = null;
 let unlistenReminderUpdated = null;
+let unlistenReminderToggle = null;
 const showBubble = ref(false);
+const showReminderModal = ref(false);
+const reminderError = ref("");
 let bubbleTimer = null;
 
 const idleFrames = motionManifest.idle?.frames ?? [];
@@ -66,6 +69,31 @@ const currentFrameSrc = computed(() => {
   const path = frames[index];
   return frameUrlMap[path] ?? "";
 });
+
+function formatRemindTime(timestamp) {
+  return new Date(timestamp).toLocaleString();
+}
+
+async function handleReminderSubmit() {
+  reminderError.value = "";
+  try {
+    await reminderStore.addReminder();
+  } catch (error) {
+    reminderError.value = error?.message ?? "创建提醒失败";
+  }
+}
+
+async function handleComplete(id) {
+  await reminderStore.complete(id);
+}
+
+async function handleSnooze(id) {
+  await reminderStore.snooze(id, 5 * 60 * 1000);
+}
+
+async function handleDelete(id) {
+  await reminderStore.remove(id);
+}
 
 /**
  * 将监视器对象转换为简短的显示文案
@@ -198,6 +226,10 @@ function handleReminderFired(payload) {
   }, 6000);
 }
 
+function closeReminderModal() {
+  showReminderModal.value = false;
+}
+
 /**
  * 手动拖拽方案：
  * - 监听 pointermove 手动设置窗口位置
@@ -286,6 +318,9 @@ onMounted(async () => {
 
     unlistenReminderFired = await onReminderFired((payload) => handleReminderFired(payload));
     unlistenReminderUpdated = await onReminderUpdated(() => reminderStore.fetchReminders());
+    unlistenReminderToggle = await onReminderToggle(() => {
+      showReminderModal.value = true;
+    });
   }
 
   updateMotionState();
@@ -299,6 +334,7 @@ onBeforeUnmount(() => {
   unlistenAutostart?.();
   unlistenReminderFired?.();
   unlistenReminderUpdated?.();
+  unlistenReminderToggle?.();
   if (reminderTimer) clearTimeout(reminderTimer);
   if (bubbleTimer) clearTimeout(bubbleTimer);
 });
@@ -352,6 +388,71 @@ watch(
         <div v-if="petStore.reminderActive" class="reminder-pulse" />
       </div>
     </div>
+    <Transition name="modal">
+      <div
+        v-if="showReminderModal"
+        class="reminder-overlay"
+        @click.self="closeReminderModal"
+      >
+        <section class="reminder-modal">
+          <header class="modal-header">
+            <div>
+              <p class="modal-label">提醒列表</p>
+              <h3>{{ reminderStore.items.length || "0" }} 项任务</h3>
+            </div>
+            <button type="button" class="icon-btn" @click="closeReminderModal" aria-label="关闭">
+              ✕
+            </button>
+          </header>
+          <form class="modal-form" @submit.prevent="handleReminderSubmit">
+            <label class="field">
+              <span>提醒标题</span>
+              <input
+                v-model="reminderStore.composer.title"
+                type="text"
+                placeholder="喝水、伸展"
+                required
+              />
+            </label>
+            <label class="field">
+              <span>备注（可选）</span>
+              <textarea
+                v-model="reminderStore.composer.message"
+                rows="2"
+                placeholder="补充提示语"
+              />
+            </label>
+            <label class="field">
+              <span>提醒时间</span>
+              <input
+                v-model="reminderStore.composer.remindAt"
+                type="datetime-local"
+                required
+              />
+            </label>
+            <button class="primary-btn" type="submit" :disabled="reminderStore.submitting">
+              {{ reminderStore.submitting ? "保存中…" : "保存提醒" }}
+            </button>
+            <p v-if="reminderError" class="reminder-error">{{ reminderError }}</p>
+          </form>
+          <ul class="reminder-list">
+            <li v-for="item in reminderStore.items" :key="item.id">
+              <div class="reminder-info">
+                <strong>{{ item.title }}</strong>
+                <small>{{ formatRemindTime(item.remind_at) }}</small>
+                <p v-if="item.message">{{ item.message }}</p>
+              </div>
+              <div class="reminder-actions">
+                <button type="button" @click="handleComplete(item.id)">完成</button>
+                <button type="button" @click="handleSnooze(item.id)">延后5分钟</button>
+                <button type="button" @click="handleDelete(item.id)">删除</button>
+              </div>
+            </li>
+            <li v-if="!reminderStore.items.length" class="placeholder">暂无提醒，使用上方表单创建。</li>
+          </ul>
+        </section>
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -425,7 +526,6 @@ watch(
   pointer-events: none;
   user-select: none;
   filter: drop-shadow(0 8px 12px rgba(29, 34, 58, 0.45));
-  margin: 0 auto;
 }
 
 .pet-face {
@@ -532,6 +632,157 @@ watch(
 .bubble-leave-to {
   opacity: 0;
   transform: translate(-50%, -120%) scale(0.92);
+}
+
+.reminder-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(4, 5, 8, 0.55);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+}
+
+.reminder-modal {
+  width: 280px;
+  max-height: 360px;
+  padding: 18px;
+  border-radius: 20px;
+  background: rgba(8, 11, 18, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 25px 55px rgba(2, 3, 6, 0.7);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.modal-label {
+  font-size: 12px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.modal-header h3 {
+  margin: 4px 0 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.icon-btn {
+  border: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  color: inherit;
+  cursor: pointer;
+}
+
+.modal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.field input,
+.field textarea {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.primary-btn {
+  align-self: flex-end;
+  border: none;
+  border-radius: 999px;
+  padding: 4px 12px;
+  background: linear-gradient(120deg, #f97316, #fbbf24);
+  color: #0b0d11;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.reminder-error {
+  color: #ff9696;
+  font-size: 11px;
+}
+
+.reminder-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.reminder-list li {
+  border-radius: 12px;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.reminder-info strong {
+  font-size: 13px;
+}
+
+.reminder-info small {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.reminder-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.reminder-actions button {
+  flex: 1;
+  border: none;
+  border-radius: 8px;
+  padding: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.12);
+  color: inherit;
+}
+
+.modal-enter-active,
+.modal-leave-active {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.modal-enter-from,
+.modal-leave-to {
+  opacity: 0;
+  transform: scale(0.96);
 }
 
 @keyframes float {

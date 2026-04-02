@@ -20,6 +20,8 @@ const MONITOR_EVENT: &str = "platform:monitors-updated";
 const AUTOSTART_EVENT: &str = "platform:autostart-updated";
 const TRAY_ID_SHOW: &str = "tray-show";
 const TRAY_ID_AUTOSTART: &str = "tray-autostart";
+const TRAY_ID_REMINDERS: &str = "tray-reminders";
+const SHOW_REMINDER_EVENT: &str = "platform:show-reminders";
 const TRAY_ID_QUIT: &str = "tray-quit";
 
 /// 屏幕坐标点（物理像素）
@@ -196,6 +198,10 @@ fn handle_autostart_toggle(app: &AppHandle) {
 fn handle_tray_menu_event(app: &AppHandle, event: &MenuEvent) {
     match event.id().0.as_str() {
         TRAY_ID_SHOW => reveal_main_window(app),
+        TRAY_ID_REMINDERS => {
+            let _ = app.emit(SHOW_REMINDER_EVENT, true);
+            reveal_main_window(app);
+        }
         TRAY_ID_AUTOSTART => handle_autostart_toggle(app),
         TRAY_ID_QUIT => app.exit(0),
         _ => {}
@@ -208,6 +214,7 @@ fn init_tray(app: &AppHandle) -> tauri::Result<()> {
     {
         let menu = MenuBuilder::new(app)
             .text(TRAY_ID_SHOW, "显示隅灵")
+            .text(TRAY_ID_REMINDERS, "提醒列表")
             .text(TRAY_ID_AUTOSTART, "切换开机自启")
             .text(TRAY_ID_QUIT, "退出")
             .build()?;
