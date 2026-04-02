@@ -392,15 +392,23 @@ function beginPanelResize(event, direction) {
 async function expandWindowForModal() {
   if (!tauriWindow || !isTauriEnvironment) return;
   if (!originalWindowBounds) {
-    const scaleFactor = await tauriWindow.scaleFactor();
-    const [size, position] = await Promise.all([tauriWindow.outerSize(), tauriWindow.outerPosition()]);
-    originalWindowBounds = {
-      size: size.toLogical(scaleFactor),
-      position: position.toLogical(scaleFactor),
-    };
+    try {
+      const scaleFactor = await tauriWindow.scaleFactor();
+      const [size, position] = await Promise.all([tauriWindow.outerSize(), tauriWindow.outerPosition()]);
+      originalWindowBounds = {
+        size: size.toLogical(scaleFactor),
+        position: position.toLogical(scaleFactor),
+      };
+    } catch (error) {
+      console.warn("记录窗口尺寸失败", error);
+    }
   }
-  await tauriWindow.setSize(new LogicalSize(REMINDER_WINDOW_SIZE.width, REMINDER_WINDOW_SIZE.height));
-  await tauriWindow.center();
+  try {
+    await tauriWindow.setSize(new LogicalSize(REMINDER_WINDOW_SIZE.width, REMINDER_WINDOW_SIZE.height));
+    await tauriWindow.center();
+  } catch (error) {
+    console.warn("调整窗口尺寸失败", error);
+  }
 }
 
 async function restoreWindowBounds() {
