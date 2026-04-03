@@ -9,7 +9,7 @@ export const usePetStore = defineStore("pet", {
   state: () => ({
     // 由 PlatformBridge 返回的监视器数组
     monitors: [],
-    // 状态提示文案，主要用于灵盒面板
+    // 状态提示文案，主要用于提醒列表面板
     statusText: "启动中…",
     // 最近一次同步时间
     lastUpdated: null,

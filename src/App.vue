@@ -1,23 +1,12 @@
 <script setup>
 /**
- * 桌宠主界面组件：
- * - 负责窗口内所有交互（拖拽、点击、双击控制面板）
- * - 承担监视器和自启动状态展示
- * - 驱动 MotionController 控制宠物动画
- * 由于采用 `<script setup>`，声明即导出，需保持结构清晰。
+ * 宠物主窗口：
+ * - 仅负责宠物显示、拖拽与提醒气泡反馈
+ * - 提醒表单/列表已迁移到独立 reminder 窗口
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { getCurrentWindow, LogicalPosition } from "@tauri-apps/api/window";
-import {
-  fetchMonitors,
-  getAutostartStatus,
-  isTauriEnvironment,
-  onReminderFired,
-  onReminderUpdated,
-  onAutostartUpdate,
-  onMonitorUpdate,
-  setAutostart,
-} from "./platformBridge";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { getCurrentWindow, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
+import { isTauriEnvironment, onReminderFired } from "./platformBridge";
 import { usePetStore } from "./stores/petStore";
 import { useReminderStore } from "./stores/reminderStore";
 import { useMotionController } from "./motion/useMotionController";
@@ -27,6 +16,7 @@ const frameModules = import.meta.glob("./assets/motion/frames/*.png", {
   eager: true,
   import: "default",
 });
+
 const frameUrlMap = Object.fromEntries(
   Object.entries(frameModules).map(([key, value]) => [
     key.replace("./assets/motion/", ""),
@@ -34,132 +24,59 @@ const frameUrlMap = Object.fromEntries(
   ])
 );
 
-// Pinia store 承载跨组件共享状态
 const petStore = usePetStore();
 const reminderStore = useReminderStore();
-// Tauri 提供的窗口句柄，用于操控位置等特性
 const tauriWindow = isTauriEnvironment ? getCurrentWindow() : null;
-// 通过计算属性获取监视器列表和电源模式，保持响应式
-const monitors = computed(() => petStore.monitors);
 const powerMode = computed(() => petStore.powerMode);
-// MotionController 提供当前动画状态、覆盖层强度以及状态 setter
 const { state: motionState, overlayIntensity, setState } = useMotionController(powerMode);
-
-let unlistenMonitors = null;
-let unlistenAutostart = null;
-let reminderTimer = null;
-let unlistenReminderFired = null;
-let unlistenReminderUpdated = null;
-const showBubble = ref(false);
-let bubbleTimer = null;
 
 const idleFrames = motionManifest.idle?.frames ?? [];
 const manualFrameIndex = ref(0);
+const showBubble = ref(false);
+const COMPACT_WINDOW_SIZE = { width: 168, height: 168 };
+const REMINDER_WINDOW_SIZE = { width: 248, height: 248 };
 
-/**
- * 解析当前状态对应的帧图片
- */
+let unlistenReminderFired = null;
+let reminderTimer = null;
+let bubbleTimer = null;
+
 const currentFrameSrc = computed(() => {
-  const frames = idleFrames;
-  if (!frames.length) return "";
-  const index = manualFrameIndex.value % frames.length;
-  const path = frames[index];
+  if (!idleFrames.length) return "";
+  const frameIndex = manualFrameIndex.value % idleFrames.length;
+  const path = idleFrames[frameIndex];
   return frameUrlMap[path] ?? "";
 });
 
-function formatRemindTime(timestamp) {
-  return new Date(timestamp).toLocaleString();
-}
+async function setMainWindowSize(nextSize) {
+  if (!tauriWindow) return;
 
-/**
- * 将监视器对象转换为简短的显示文案
- * @param {object} monitor - 后端返回的监视器描述
- * @returns {string} - 包含名称、分辨率、缩放比的信息
- */
-function formatMonitorLabel(monitor) {
-  const size = `${monitor.size.width} × ${monitor.size.height}`;
-  const scale = Number(monitor.scale_factor ?? 1)
-    .toFixed(2)
-    .replace(/\.0+$/, "");
-  return `${monitor.name ?? "未命名显示器"} · ${size} @${scale}x`;
-}
-
-/**
- * 从 PlatformBridge 同步监视器列表并写入 store
- * - 请求过程中更新状态文案，便于用户感知
- * - 捕获异常并打印，避免 UI 崩溃
- */
-async function syncMonitors() {
-  if (!isTauriEnvironment) {
-    petStore.statusText = "浏览器预览模式：无法获取系统显示器";
-    petStore.setMonitors([]);
-    return;
-  }
   try {
-    petStore.statusText = "同步显示器信息…";
-    const list = await fetchMonitors();
-    petStore.setMonitors(list);
+    const scaleFactor = await tauriWindow.scaleFactor();
+    const [currentPos, currentSize] = await Promise.all([
+      tauriWindow.outerPosition(),
+      tauriWindow.outerSize(),
+    ]);
+    const logicalPos = currentPos.toLogical(scaleFactor);
+    const logicalSize = currentSize.toLogical(scaleFactor);
+    const widthChanged = Math.round(logicalSize.width) !== nextSize.width;
+    const heightChanged = Math.round(logicalSize.height) !== nextSize.height;
+
+    if (!widthChanged && !heightChanged) return;
+
+    const anchorCenterX = logicalPos.x + logicalSize.width / 2;
+    const anchorBottomY = logicalPos.y + logicalSize.height;
+    const nextPosition = new LogicalPosition(
+      Math.round(anchorCenterX - nextSize.width / 2),
+      Math.round(anchorBottomY - nextSize.height)
+    );
+
+    await tauriWindow.setSize(new LogicalSize(nextSize.width, nextSize.height));
+    await tauriWindow.setPosition(nextPosition);
   } catch (error) {
-    petStore.statusText = "读取显示器信息失败";
-    console.error("monitor sync failed", error);
+    console.error("调整主窗口尺寸失败", error);
   }
 }
 
-/**
- * 查询当前系统自启动设置
- */
-async function syncAutostart() {
-  if (!isTauriEnvironment) {
-    petStore.setAutostart(false);
-    return;
-  }
-  try {
-    const enabled = await getAutostartStatus();
-    petStore.setAutostart(enabled);
-  } catch (error) {
-    console.error("autostart status failed", error);
-  }
-}
-
-/**
- * 切换自启动状态
- * - 直接调用 Rust 端命令并以返回结果为准
- */
-async function handleAutostartToggle() {
-  if (!isTauriEnvironment) {
-    console.warn("当前在浏览器预览模式，无法设置系统自启");
-    return;
-  }
-  try {
-    const next = await setAutostart(!petStore.autostartEnabled);
-    petStore.setAutostart(next);
-  } catch (error) {
-    console.error("failed to set autostart", error);
-  }
-}
-
-/**
- * 切换低功耗模式
- * - 仅修改 store，由 MotionController watch 负责降帧
- */
-function toggleLowPower() {
-  petStore.togglePowerMode();
-}
-
-/**
- * 触发提醒脉冲动画，占位用
- * - 设置提醒标记，若已有计时器需先清除
- */
-function triggerReminder() {
-  if (reminderTimer) clearTimeout(reminderTimer);
-  petStore.pulseReminder(true);
-  reminderTimer = setTimeout(() => petStore.pulseReminder(false), 4000);
-}
-
-/**
- * 根据 store 状态推导动画表现
- * 优先级：拖拽 > 提醒 > 低功耗 > 待机
- */
 function updateMotionState() {
   if (petStore.dragging) {
     setState("drag");
@@ -176,39 +93,35 @@ function updateMotionState() {
   setState("idle");
 }
 
-/**
- * 点击宠物时给一次短暂的 react 动画
- */
 function handleAvatarClick() {
   if (idleFrames.length > 1) {
     manualFrameIndex.value = (manualFrameIndex.value + 1) % idleFrames.length;
   }
   setState("react");
-  setTimeout(() => updateMotionState(), 500);
+  window.setTimeout(() => updateMotionState(), 500);
 }
 
-/**
- * 切换提醒面板
- */
 function handleReminderFired(payload) {
   reminderStore.markFired(payload);
   petStore.pulseReminder(true);
+  void setMainWindowSize(REMINDER_WINDOW_SIZE);
+
   if (reminderTimer) clearTimeout(reminderTimer);
-  reminderTimer = setTimeout(() => petStore.pulseReminder(false), 5000);
+  reminderTimer = window.setTimeout(() => {
+    petStore.pulseReminder(false);
+  }, 5000);
+
   showBubble.value = true;
   if (bubbleTimer) clearTimeout(bubbleTimer);
-  bubbleTimer = setTimeout(() => {
+  bubbleTimer = window.setTimeout(() => {
     showBubble.value = false;
+    void setMainWindowSize(COMPACT_WINDOW_SIZE);
   }, 6000);
 }
 
-/**
- * 手动拖拽方案：
- * - 监听 pointermove 手动设置窗口位置
- * - 用于 startDragging 不可用或报错时的兜底
- */
 async function fallbackManualDrag(event) {
   if (!tauriWindow) return;
+
   const target = event.target;
   if (target?.setPointerCapture) {
     try {
@@ -217,6 +130,7 @@ async function fallbackManualDrag(event) {
       console.warn("指针捕获失败，不影响拖拽", captureError);
     }
   }
+
   const startMouse = { x: event.screenX, y: event.screenY };
   const startPos = await tauriWindow.outerPosition();
   const scaleFactor = await tauriWindow.scaleFactor();
@@ -250,16 +164,12 @@ async function fallbackManualDrag(event) {
   });
 }
 
-/**
- * 按下宠物开始拖拽
- * - 有 startDragging 则调用原生拖拽
- * - 否则退回手动计算位置
- */
 async function beginDrag(event) {
   if (!tauriWindow) {
     console.warn("Tauri 窗口句柄不可用，跳过拖拽");
     return;
   }
+
   event.preventDefault();
   petStore.setDragging(true);
   setState("drag");
@@ -272,47 +182,21 @@ async function beginDrag(event) {
   }
 }
 
-/**
- * 生命周期：组件挂载时同步一次数据并订阅事件
- */
 onMounted(async () => {
-  await Promise.all([syncMonitors(), syncAutostart()]);
-  await reminderStore.fetchReminders();
-
+  void setMainWindowSize(COMPACT_WINDOW_SIZE);
   if (isTauriEnvironment) {
-    unlistenMonitors = await onMonitorUpdate((payload) => {
-      petStore.setMonitors(payload ?? []);
-    });
-
-    unlistenAutostart = await onAutostartUpdate((payload) => {
-      petStore.setAutostart(Boolean(payload));
-    });
-
     unlistenReminderFired = await onReminderFired((payload) => handleReminderFired(payload));
-    unlistenReminderUpdated = await onReminderUpdated(() => reminderStore.fetchReminders());
-    unlistenReminderToggle = await onReminderToggle(() => {
-      console.info("收到托盘提醒列表事件，开启提醒面板");
-      openReminderModal();
-    });
   }
 
   updateMotionState();
 });
 
-/**
- * 生命周期：卸载时释放监听、计时器，防止内存泄漏
- */
 onBeforeUnmount(() => {
-  unlistenMonitors?.();
-  unlistenAutostart?.();
   unlistenReminderFired?.();
-  unlistenReminderUpdated?.();
-  unlistenReminderToggle?.();
   if (reminderTimer) clearTimeout(reminderTimer);
   if (bubbleTimer) clearTimeout(bubbleTimer);
 });
 
-// 监听关键状态，变化时更新动画状态
 watch(
   () => [petStore.dragging, petStore.reminderActive, petStore.powerMode],
   () => updateMotionState(),
@@ -332,12 +216,10 @@ watch(
           </p>
         </div>
       </Transition>
+
       <div
         class="pet-avatar"
         :class="[`state-${motionState}`, { dragging: petStore.dragging }]"
-        :style="{
-          boxShadow: `0 25px 45px rgba(23, 25, 35, ${0.35 + overlayIntensity * 0.25})`,
-        }"
         @pointerdown="beginDrag"
         @click="handleAvatarClick"
       >
@@ -358,6 +240,7 @@ watch(
             <div class="pet-tail" />
           </template>
         </div>
+
         <div v-if="petStore.reminderActive" class="reminder-pulse" />
       </div>
     </div>
@@ -366,30 +249,26 @@ watch(
 
 <style scoped>
 .pet-shell {
-  position: relative;
-  width: fit-content;
-  height: fit-content;
-  padding: 0;
-  user-select: none;
-  display: inline-flex;
-  align-items: center;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
   justify-content: center;
+  user-select: none;
   background: transparent;
+  overflow: visible;
 }
 
 .pet-stage {
   position: relative;
-  display: inline-flex;
-  flex-direction: column;
+  width: 168px;
+  height: 168px;
+  display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
   padding: 0;
-  width: fit-content;
-  height: fit-content;
-  border-radius: 16px;
   background: transparent;
-  border: none;
-  box-shadow: none;
+  overflow: visible;
 }
 
 .pet-avatar {
@@ -397,8 +276,6 @@ watch(
   width: 168px;
   height: 168px;
   border-radius: 50%;
-  background: transparent;
-  border: none;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -411,25 +288,46 @@ watch(
   cursor: grabbing;
 }
 
+.pet-avatar.state-drag {
+  transform: scale(1.03);
+}
+
+.pet-avatar.state-react .pet-body,
+.pet-avatar.state-reminderPulse .pet-body {
+  transform: scale(1.02);
+}
+
+.pet-avatar.state-sleep .pet-body {
+  opacity: 0.92;
+  filter: saturate(0.82);
+}
+
 .pet-body {
-  width: 120px;
-  height: 120px;
+  width: 156px;
+  height: 156px;
+  position: relative;
+  overflow: hidden;
   border-radius: 50% 50% 45% 45%;
   background: radial-gradient(circle at 30% 30%, #fdfdfd, #b0b8ff);
-  position: relative;
-  animation: float 4s ease-in-out infinite;
+  transition: transform 0.25s ease, filter 0.25s ease, opacity 0.25s ease;
 }
 
 .pet-body.has-frame {
+  width: 164px;
+  height: 164px;
   background: transparent;
-  border-radius: 50%;
-  animation: float 4s ease-in-out infinite;
+  border-radius: 0;
+  overflow: visible;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
 }
 
 .pet-frame {
-  width: 120px;
-  height: 120px;
-  object-fit: contain;
+  width: auto;
+  height: 100%;
+  max-width: 100%;
+  display: block;
   pointer-events: none;
   user-select: none;
   filter: drop-shadow(0 8px 12px rgba(29, 34, 58, 0.45));
@@ -468,18 +366,18 @@ watch(
 
 .pet-tail {
   position: absolute;
+  right: -15px;
+  bottom: 15px;
   width: 40px;
   height: 40px;
   border-radius: 50%;
-  right: -15px;
-  bottom: 15px;
   background: rgba(176, 184, 255, 0.65);
   filter: blur(3px);
 }
 
 .reminder-pulse {
   position: absolute;
-  inset: -12px;
+  inset: -4px;
   border-radius: 50%;
   border: 2px solid rgba(65, 255, 211, 0.6);
   animation: pulse 1.6s ease-in-out infinite;
@@ -513,6 +411,7 @@ watch(
 }
 
 .bubble-label {
+  margin: 0;
   font-size: 11px;
   letter-spacing: 0.2em;
   text-transform: uppercase;
@@ -520,12 +419,13 @@ watch(
 }
 
 .bubble-title {
+  margin: 4px 0;
   font-size: 16px;
   font-weight: 600;
-  margin: 4px 0;
 }
 
 .bubble-body {
+  margin: 0;
   font-size: 13px;
   opacity: 0.8;
 }
@@ -541,187 +441,6 @@ watch(
   transform: translate(-50%, -120%) scale(0.92);
 }
 
-.reminder-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(4, 6, 12, 0.6);
-  backdrop-filter: blur(14px) saturate(140%);
-  z-index: 1200;
-  transition: opacity 0.25s ease;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-}
-
-.reminder-overlay:not(.is-live) {
-  pointer-events: none;
-}
-
-.reminder-modal {
-  position: relative;
-  padding: 24px;
-  border-radius: 28px;
-  background: linear-gradient(180deg, rgba(18, 23, 37, 0.95), rgba(7, 10, 18, 0.98));
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 35px 80px rgba(2, 3, 6, 0.75);
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  overflow: hidden;
-  animation: reminder-pop 0.25s ease;
-  transition: box-shadow 0.2s ease;
-}
-
-.modal-hero-bar {
-  width: 60%;
-  height: 6px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #f97316, #fbbf24, #60a5fa);
-  opacity: 0.9;
-  animation: hero-flow 0.4s ease forwards;
-}
-
-.modal-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  user-select: none;
-}
-
-.modal-label {
-  font-size: 12px;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  opacity: 0.6;
-}
-
-.modal-header h3 {
-  margin: 4px 0 0;
-  font-size: 20px;
-  font-weight: 600;
-}
-
-.icon-btn {
-  border: none;
-  width: 28px;
-  height: 28px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.12);
-  color: inherit;
-  cursor: pointer;
-}
-
-.modal-form {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.75);
-}
-
-.field input,
-.field textarea {
-  width: 100%;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  background: rgba(255, 255, 255, 0.05);
-  color: inherit;
-  padding: 6px 8px;
-  font-size: 12px;
-}
-
-.primary-btn {
-  align-self: flex-end;
-  border: none;
-  border-radius: 999px;
-  padding: 4px 12px;
-  background: linear-gradient(120deg, #f97316, #fbbf24);
-  color: #0b0d11;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.reminder-error {
-  color: #ff9696;
-  font-size: 11px;
-}
-
-.reminder-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  flex: 1;
-  overflow-y: auto;
-  padding-right: 6px;
-}
-
-.reminder-list li {
-  border-radius: 12px;
-  padding: 8px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.reminder-info strong {
-  font-size: 13px;
-}
-
-.reminder-info small {
-  font-size: 11px;
-  opacity: 0.7;
-}
-
-.reminder-actions {
-  display: flex;
-  gap: 6px;
-}
-
-.reminder-actions button {
-  flex: 1;
-  border: none;
-  border-radius: 8px;
-  padding: 4px;
-  font-size: 11px;
-  cursor: pointer;
-  background: rgba(255, 255, 255, 0.12);
-  color: inherit;
-}
-
-.modal-enter-active,
-.modal-leave-active {
-  transition: opacity 0.25s ease, transform 0.25s ease;
-}
-
-.modal-enter-from,
-.modal-leave-to {
-  opacity: 0;
-  transform: scale(0.96);
-}
-
-
-@keyframes float {
-  0%,
-  100% {
-    transform: translateY(0px);
-  }
-  50% {
-    transform: translateY(-6px);
-  }
-}
-
 @keyframes pulse {
   0% {
     transform: scale(0.9);
@@ -732,60 +451,4 @@ watch(
     opacity: 0.2;
   }
 }
-
-@keyframes reminder-pop {
-  0% {
-    opacity: 0;
-    transform: translateY(12px) scale(0.96);
-  }
-  100% {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-@keyframes hero-flow {
-  from {
-    width: 40%;
-    opacity: 0.4;
-  }
-  to {
-    width: 100%;
-    opacity: 1;
-  }
-}
 </style>
-
-.sheet-enter-active,
-.sheet-leave-active {
-  transition: opacity 0.25s ease, transform 0.25s ease;
-}
-
-.sheet-enter-from,
-.sheet-leave-to {
-  opacity: 0;
-  transform: translateY(12px) scale(0.98);
-}
-
-.reminder-toast {
-  width: 100%;
-  padding: 12px;
-  border-radius: 16px;
-  background: rgba(23, 32, 44, 0.8);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  text-align: center;
-}
-
-.toast-label {
-  font-size: 11px;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  opacity: 0.6;
-  margin-bottom: 4px;
-}
-
-.toast-title {
-  font-size: 14px;
-  font-weight: 600;
-  margin-bottom: 2px;
-}

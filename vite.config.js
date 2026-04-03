@@ -1,7 +1,10 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const host = process.env.TAURI_DEV_HOST;
+const rootDir = fileURLToPath(new URL(".", import.meta.url));
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
@@ -26,6 +29,14 @@ export default defineConfig(async () => ({
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],
+    },
+  },
+  build: {
+    rollupOptions: {
+      input: {
+        main: resolve(rootDir, "index.html"),
+        reminder: resolve(rootDir, "reminder.html"),
+      },
     },
   },
 }));

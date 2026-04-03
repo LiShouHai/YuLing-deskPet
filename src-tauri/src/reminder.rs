@@ -1,16 +1,32 @@
 use chrono::{TimeZone, Utc};
-use rusqlite::{params, Connection, Row};
+use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf, time::Duration};
+use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 use tauri::{
     async_runtime::{self, spawn_blocking},
     AppHandle, Emitter, Manager,
 };
-use tokio::time::sleep;
+use tokio::{
+    sync::Notify,
+    time::{sleep, sleep_until, Instant},
+};
 use uuid::Uuid;
 
 pub const REMINDER_FIRED_EVENT: &str = "reminder:fired";
 pub const REMINDER_UPDATED_EVENT: &str = "reminder:updated";
+
+#[derive(Debug, Clone)]
+pub struct ReminderScheduler {
+    pub notify: Arc<Notify>,
+}
+
+impl Default for ReminderScheduler {
+    fn default() -> Self {
+        Self {
+            notify: Arc::new(Notify::new()),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReminderRecord {
@@ -48,12 +64,35 @@ pub fn init_database(app: &AppHandle) -> Result<(), String> {
 }
 
 pub fn start_scheduler(app: AppHandle) {
+    let notify = app.state::<ReminderScheduler>().notify.clone();
     async_runtime::spawn(async move {
         loop {
-            if let Err(err) = poll_due_reminders(&app).await {
-                eprintln!("[reminder] 调度失败: {err}");
+            match next_pending_timestamp(&app).await {
+                Ok(Some(timestamp)) => {
+                    let sleeper = sleep_until(deadline_from_timestamp(timestamp));
+                    tokio::pin!(sleeper);
+
+                    let wake_signal = notify.notified();
+                    tokio::pin!(wake_signal);
+
+                    tokio::select! {
+                        _ = &mut sleeper => {
+                            if let Err(err) = poll_due_reminders(&app).await {
+                                eprintln!("[reminder] 调度失败: {err}");
+                                sleep(Duration::from_secs(1)).await;
+                            }
+                        }
+                        _ = &mut wake_signal => {}
+                    }
+                }
+                Ok(None) => {
+                    notify.notified().await;
+                }
+                Err(err) => {
+                    eprintln!("[reminder] 读取下个提醒失败: {err}");
+                    sleep(Duration::from_secs(1)).await;
+                }
             }
-            sleep(Duration::from_secs(30)).await;
         }
     });
 }
@@ -85,6 +124,7 @@ pub async fn create_reminder(app: AppHandle, input: ReminderInput) -> Result<Rem
     .await
     .map_err(|err| err.to_string())??;
 
+    notify_scheduler(&app);
     let _ = app.emit(REMINDER_UPDATED_EVENT, &record);
     Ok(record)
 }
@@ -143,6 +183,7 @@ pub async fn snooze_reminder(
     .await
     .map_err(|err| err.to_string())??;
 
+    notify_scheduler(&app);
     let _ = app.emit(REMINDER_UPDATED_EVENT, &record);
     Ok(record)
 }
@@ -168,6 +209,7 @@ async fn update_status(app: AppHandle, id: &str, status: &str) -> Result<bool, S
     .map_err(|err| err.to_string())??;
 
     if updated {
+        notify_scheduler(&app);
         let _ = app.emit(
             REMINDER_UPDATED_EVENT,
             &ReminderIdPayload { id: emit_id },
@@ -231,6 +273,27 @@ pub async fn poll_due_reminders(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+async fn next_pending_timestamp(app: &AppHandle) -> Result<Option<i64>, String> {
+    let db_path = database_path(app)?;
+    spawn_blocking(move || -> Result<Option<i64>, String> {
+        let conn = Connection::open(db_path).map_err(|err| err.to_string())?;
+        apply_migrations(&conn).map_err(|err| err.to_string())?;
+        conn.query_row(
+            "SELECT remind_at
+             FROM reminders
+             WHERE status = 'pending'
+             ORDER BY remind_at ASC
+             LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
 fn database_path(app: &AppHandle) -> Result<PathBuf, String> {
     let mut dir = app
         .path()
@@ -269,6 +332,16 @@ fn fetch_by_id(conn: &Connection, id: &str) -> Result<ReminderRecord, String> {
 
 fn current_ts() -> i64 {
     Utc::now().timestamp_millis()
+}
+
+fn deadline_from_timestamp(timestamp: i64) -> Instant {
+    let delay_ms = timestamp.saturating_sub(current_ts()).max(0) as u64;
+    Instant::now() + Duration::from_millis(delay_ms)
+}
+
+fn notify_scheduler(app: &AppHandle) {
+    let notify = app.state::<ReminderScheduler>().notify.clone();
+    notify.notify_one();
 }
 
 #[allow(dead_code)]

@@ -21,7 +21,6 @@ const AUTOSTART_EVENT: &str = "platform:autostart-updated";
 const TRAY_ID_SHOW: &str = "tray-show";
 const TRAY_ID_AUTOSTART: &str = "tray-autostart";
 const TRAY_ID_REMINDERS: &str = "tray-reminders";
-const SHOW_REMINDER_EVENT: &str = "platform:show-reminders";
 const TRAY_ID_QUIT: &str = "tray-quit";
 
 /// 屏幕坐标点（物理像素）
@@ -178,6 +177,15 @@ fn reveal_main_window(app: &AppHandle) {
     }
 }
 
+/// 显示提醒窗口并重新居中，避免窗口被用户移出可视区域
+fn reveal_reminder_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("reminder") {
+        let _ = window.center();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
 /// 托盘菜单中“切换自启”项的处理
 fn handle_autostart_toggle(app: &AppHandle) {
     if let Ok(current) = app.autolaunch().is_enabled() {
@@ -198,10 +206,7 @@ fn handle_autostart_toggle(app: &AppHandle) {
 fn handle_tray_menu_event(app: &AppHandle, event: &MenuEvent) {
     match event.id().0.as_str() {
         TRAY_ID_SHOW => reveal_main_window(app),
-        TRAY_ID_REMINDERS => {
-            let _ = app.emit(SHOW_REMINDER_EVENT, true);
-            reveal_main_window(app);
-        }
+        TRAY_ID_REMINDERS => reveal_reminder_window(app),
         TRAY_ID_AUTOSTART => handle_autostart_toggle(app),
         TRAY_ID_QUIT => app.exit(0),
         _ => {}
@@ -245,6 +250,7 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let handle = app.handle();
+            app.manage(reminder::ReminderScheduler::default());
             start_monitor_broadcast(handle.clone()); // 启动屏幕轮询
             init_tray(&handle)?; // 建立托盘与菜单
             reminder::init_database(&handle)?;
