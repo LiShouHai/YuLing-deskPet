@@ -34,11 +34,13 @@ const idleFrames = motionManifest.idle?.frames ?? [];
 const manualFrameIndex = ref(0);
 const showBubble = ref(false);
 const COMPACT_WINDOW_SIZE = { width: 168, height: 168 };
-const REMINDER_WINDOW_SIZE = { width: 248, height: 248 };
+const REMINDER_WINDOW_SIZE = { width: 236, height: 252 };
+const DRAG_THRESHOLD = 6;
 
 let unlistenReminderFired = null;
 let reminderTimer = null;
 let bubbleTimer = null;
+let suppressClickUntil = 0;
 
 const currentFrameSrc = computed(() => {
   if (!idleFrames.length) return "";
@@ -94,6 +96,10 @@ function updateMotionState() {
 }
 
 function handleAvatarClick() {
+  const now = window.performance?.now?.() ?? Date.now();
+  // 拖拽结束后浏览器可能仍会补发 click，这里直接忽略。
+  if (now < suppressClickUntil) return;
+
   if (idleFrames.length > 1) {
     manualFrameIndex.value = (manualFrameIndex.value + 1) % idleFrames.length;
   }
@@ -136,10 +142,21 @@ async function fallbackManualDrag(event) {
   const scaleFactor = await tauriWindow.scaleFactor();
   const logicalStart = startPos.toLogical(scaleFactor);
 
-  await new Promise((resolve) => {
+  return new Promise((resolve) => {
+    let didDrag = false;
+
     const move = (moveEvent) => {
       const dx = moveEvent.screenX - startMouse.x;
       const dy = moveEvent.screenY - startMouse.y;
+      const movedEnough = Math.hypot(dx, dy) >= DRAG_THRESHOLD;
+
+      if (!didDrag && !movedEnough) return;
+      if (!didDrag) {
+        didDrag = true;
+        petStore.setDragging(true);
+        setState("drag");
+      }
+
       const next = new LogicalPosition(
         Math.round(logicalStart.x + dx),
         Math.round(logicalStart.y + dy)
@@ -156,7 +173,7 @@ async function fallbackManualDrag(event) {
           console.warn("释放指针捕获失败", releaseError);
         }
       }
-      resolve();
+      resolve(didDrag);
     };
 
     window.addEventListener("pointermove", move);
@@ -171,13 +188,16 @@ async function beginDrag(event) {
   }
 
   event.preventDefault();
-  petStore.setDragging(true);
-  setState("drag");
 
   try {
-    await fallbackManualDrag(event);
+    const didDrag = await fallbackManualDrag(event);
+    if (didDrag) {
+      suppressClickUntil = (window.performance?.now?.() ?? Date.now()) + 250;
+    }
   } finally {
-    petStore.setDragging(false);
+    if (petStore.dragging) {
+      petStore.setDragging(false);
+    }
     updateMotionState();
   }
 }
@@ -209,10 +229,11 @@ watch(
     <div class="pet-stage">
       <Transition name="bubble">
         <div v-if="showBubble && reminderStore.lastFired" class="reminder-bubble">
-          <p class="bubble-label">提醒</p>
+          <span class="bubble-signal" aria-hidden="true" />
+          <p class="bubble-label">signal</p>
           <p class="bubble-title">{{ reminderStore.lastFired.title }}</p>
           <p class="bubble-body">
-            {{ reminderStore.lastFired.message || "记得活动一下身体～" }}
+            {{ reminderStore.lastFired.message || "记得处理一下刚到的提醒。" }}
           </p>
         </div>
       </Transition>
@@ -257,6 +278,7 @@ watch(
   user-select: none;
   background: transparent;
   overflow: visible;
+  position: relative;
 }
 
 .pet-stage {
@@ -330,7 +352,7 @@ watch(
   display: block;
   pointer-events: none;
   user-select: none;
-  filter: drop-shadow(0 8px 12px rgba(29, 34, 58, 0.45));
+  filter: drop-shadow(0 14px 18px rgba(20, 23, 32, 0.42));
 }
 
 .pet-face {
@@ -377,78 +399,122 @@ watch(
 
 .reminder-pulse {
   position: absolute;
-  inset: -4px;
+  inset: -7px;
   border-radius: 50%;
-  border: 2px solid rgba(65, 255, 211, 0.6);
-  animation: pulse 1.6s ease-in-out infinite;
+  border: 2px solid rgba(65, 255, 211, 0.52);
+  box-shadow:
+    0 0 0 8px rgba(65, 255, 211, 0.06),
+    0 0 26px rgba(65, 255, 211, 0.18);
+  animation: pulse 1.5s cubic-bezier(0.22, 1, 0.36, 1) infinite;
 }
 
 .reminder-bubble {
   position: absolute;
-  top: 0;
-  left: 50%;
-  transform: translate(-50%, -110%);
-  width: 220px;
-  padding: 12px 16px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.95);
-  color: #0d1220;
-  box-shadow: 0 16px 40px rgba(5, 6, 11, 0.4);
-  border: 1px solid rgba(255, 255, 255, 0.6);
+  top: -84px;
+  right: -6px;
+  width: 166px;
+  padding: 12px 14px 13px;
+  border-radius: 22px;
+  color: #12202b;
+  background:
+    linear-gradient(180deg, rgba(254, 250, 241, 0.98), rgba(245, 239, 227, 0.96));
+  box-shadow:
+    0 18px 42px rgba(4, 6, 12, 0.34),
+    0 0 0 1px rgba(255, 255, 255, 0.34);
+  pointer-events: none;
 }
 
 .reminder-bubble::after {
   content: "";
   position: absolute;
   bottom: -8px;
-  left: 50%;
-  transform: translateX(-50%) rotate(45deg);
+  right: 28px;
+  transform: rotate(45deg);
   width: 16px;
   height: 16px;
   background: inherit;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.6);
-  border-right: 1px solid rgba(255, 255, 255, 0.6);
+  border-radius: 4px;
+}
+
+.bubble-signal {
+  display: inline-flex;
+  width: 8px;
+  height: 8px;
+  margin-bottom: 8px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #f0b257, #3fd0b7);
+  box-shadow: 0 0 0 5px rgba(63, 208, 183, 0.12);
 }
 
 .bubble-label {
   margin: 0;
-  font-size: 11px;
-  letter-spacing: 0.2em;
+  font-size: 10px;
+  letter-spacing: 0.22em;
   text-transform: uppercase;
-  color: #475569;
+  color: #667782;
 }
 
 .bubble-title {
-  margin: 4px 0;
-  font-size: 16px;
-  font-weight: 600;
+  margin: 2px 0 5px;
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1.06;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .bubble-body {
   margin: 0;
   font-size: 13px;
-  opacity: 0.8;
+  line-height: 1.35;
+  color: #4b5b65;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .bubble-enter-active,
 .bubble-leave-active {
-  transition: opacity 0.25s ease, transform 0.25s ease;
+  transition:
+    opacity 0.28s ease,
+    transform 0.32s cubic-bezier(0.22, 1, 0.36, 1),
+    filter 0.28s ease;
 }
 
 .bubble-enter-from,
 .bubble-leave-to {
   opacity: 0;
-  transform: translate(-50%, -120%) scale(0.92);
+  transform: translate3d(6px, -12px, 0) scale(0.95);
+  filter: blur(10px);
 }
 
 @keyframes pulse {
   0% {
-    transform: scale(0.9);
-    opacity: 0.8;
+    transform: scale(0.92);
+    opacity: 0.78;
+  }
+  70% {
+    transform: scale(1.06);
+    opacity: 0.26;
   }
   100% {
     transform: scale(1.1);
-    opacity: 0.2;
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pet-avatar,
+  .pet-body,
+  .reminder-bubble,
+  .bubble-enter-active,
+  .bubble-leave-active,
+  .reminder-pulse {
+    transition: none !important;
+    animation: none !important;
   }
 }
 </style>

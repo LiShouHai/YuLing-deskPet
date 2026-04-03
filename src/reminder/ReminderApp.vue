@@ -10,6 +10,8 @@ import { useReminderStore } from "../stores/reminderStore";
 
 const reminderStore = useReminderStore();
 const tauriWindow = isTauriEnvironment ? getCurrentWindow() : null;
+const composerOpen = ref(false);
+const completedOpen = ref(false);
 const errorMessage = ref("");
 const statusMessage = ref("正在同步提醒…");
 
@@ -17,15 +19,42 @@ let unlistenReminderUpdated = null;
 let unlistenReminderFired = null;
 let unlistenCloseRequested = null;
 
+const activeItems = computed(() =>
+  reminderStore.items.filter((item) => ["pending", "notified"].includes(item.status))
+);
+
+const completedItems = computed(() =>
+  reminderStore.items.filter((item) => item.status === "completed")
+);
+
 const pendingCount = computed(
   () => reminderStore.items.filter((item) => item.status === "pending").length
 );
 
+const notifiedCount = computed(
+  () => reminderStore.items.filter((item) => item.status === "notified").length
+);
+
 const nextReminderText = computed(() => {
-  const nextItem = reminderStore.items.find((item) =>
-    ["pending", "notified"].includes(item.status)
-  );
+  const nextItem = activeItems.value[0];
   return nextItem ? formatDisplayTime(nextItem.remind_at) : "暂无待提醒事项";
+});
+
+const recentSignal = computed(
+  () => reminderStore.lastFired ?? reminderStore.items.find((item) => item.status === "notified") ?? null
+);
+
+const recentSignalText = computed(() => {
+  if (!recentSignal.value) return "";
+  return `最近信号 ${recentSignal.value.title}`;
+});
+
+const headerMessage = computed(() => errorMessage.value || statusMessage.value);
+
+const headerTone = computed(() => {
+  if (errorMessage.value) return "is-error";
+  if (recentSignal.value) return "is-live";
+  return "is-neutral";
 });
 
 function formatDisplayTime(timestamp) {
@@ -62,12 +91,29 @@ function formatStatus(status) {
   }
 }
 
+function getCardEyebrow(status) {
+  return status === "notified" ? "刚刚到点" : "等待触发";
+}
+
+function toggleComposer() {
+  composerOpen.value = !composerOpen.value;
+  if (composerOpen.value) ensureDefaultReminderTime();
+}
+
+function toggleCompleted() {
+  completedOpen.value = !completedOpen.value;
+}
+
 async function syncReminders() {
   statusMessage.value = "正在同步提醒…";
   await reminderStore.fetchReminders();
-  statusMessage.value = reminderStore.items.length
-    ? `已加载 ${reminderStore.items.length} 条提醒`
-    : "还没有任何提醒";
+
+  statusMessage.value = activeItems.value.length
+    ? `待处理 ${activeItems.value.length} 条提醒`
+    : reminderStore.items.length
+      ? "当前没有待处理提醒"
+      : "还没有任何提醒";
+
   ensureDefaultReminderTime();
 }
 
@@ -77,6 +123,7 @@ async function submitReminder() {
     await reminderStore.addReminder();
     ensureDefaultReminderTime();
     statusMessage.value = "提醒已保存";
+    composerOpen.value = false;
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : "保存提醒失败";
   }
@@ -131,6 +178,7 @@ function handleKeydown(event) {
 onMounted(async () => {
   ensureDefaultReminderTime();
   await syncReminders();
+  composerOpen.value = !activeItems.value.length;
 
   if (tauriWindow) {
     unlistenCloseRequested = await tauriWindow.onCloseRequested(async (event) => {
@@ -165,39 +213,52 @@ onBeforeUnmount(() => {
 <template>
   <div class="reminder-shell">
     <section class="reminder-window" role="dialog" aria-labelledby="reminder-title">
-      <div class="hero-bar" />
-
       <header class="window-header">
         <div class="header-copy">
-          <p class="eyebrow">Reminder Console</p>
+          <p class="eyebrow">Pet Dock</p>
           <h1 id="reminder-title">提醒列表</h1>
           <p class="subtitle">下一条：{{ nextReminderText }}</p>
         </div>
-        <button class="close-btn" aria-label="关闭提醒窗口" @click="hideWindow">×</button>
+
+        <div class="header-tools">
+          <p class="status-pill" :class="headerTone">{{ headerMessage }}</p>
+          <button class="close-btn" type="button" aria-label="关闭提醒窗口" @click="hideWindow">
+            ×
+          </button>
+        </div>
       </header>
 
-      <section class="summary-panel" aria-label="提醒统计">
-        <article class="summary-card">
-          <span>待触发</span>
-          <strong>{{ pendingCount }}</strong>
-        </article>
-        <article class="summary-card">
-          <span>总数</span>
-          <strong>{{ reminderStore.items.length }}</strong>
-        </article>
+      <section class="control-strip" aria-label="提醒统计">
+        <div class="summary-panel">
+          <article class="summary-pill">
+            <span>待处理</span>
+            <strong>{{ activeItems.length }}</strong>
+          </article>
+          <article class="summary-pill">
+            <span>已触发</span>
+            <strong>{{ notifiedCount }}</strong>
+          </article>
+          <article class="summary-pill">
+            <span>总数</span>
+            <strong>{{ reminderStore.items.length }}</strong>
+          </article>
+          <article v-if="recentSignalText" class="summary-pill signal-pill">
+            <span>最近</span>
+            <strong>{{ recentSignalText }}</strong>
+          </article>
+        </div>
+
+        <button class="launch-btn" type="button" @click="toggleComposer">
+          {{ composerOpen ? "收起新建" : "+ 新建提醒" }}
+        </button>
       </section>
 
-      <p class="status-line">{{ statusMessage }}</p>
-
-      <section v-if="reminderStore.lastFired" class="fired-banner">
-        <p class="fired-label">最近触发</p>
-        <strong>{{ reminderStore.lastFired.title }}</strong>
-        <p>{{ reminderStore.lastFired.message || "记得处理这条提醒。" }}</p>
-      </section>
-
-      <form class="composer-panel" @submit.prevent="submitReminder">
+      <section class="list-panel">
         <div class="panel-heading">
-          <h2>新建提醒</h2>
+          <div>
+            <h2>待处理提醒</h2>
+            <p class="list-caption">优先处理已触发与待触发事项</p>
+          </div>
           <button
             type="button"
             class="ghost-btn"
@@ -208,92 +269,149 @@ onBeforeUnmount(() => {
           </button>
         </div>
 
-        <label class="field">
-          <span>标题</span>
-          <input
-            v-model="reminderStore.composer.title"
-            type="text"
-            maxlength="40"
-            placeholder="比如：喝水、开会、站起来活动"
-          />
-        </label>
-
-        <label class="field">
-          <span>备注</span>
-          <textarea
-            v-model="reminderStore.composer.message"
-            rows="3"
-            maxlength="120"
-            placeholder="可选，补充一点上下文"
-          />
-        </label>
-
-        <label class="field">
-          <span>提醒时间</span>
-          <input v-model="reminderStore.composer.remindAt" type="datetime-local" />
-        </label>
-
-        <p v-if="errorMessage" class="error-text">{{ errorMessage }}</p>
-
-        <button class="primary-btn" type="submit" :disabled="reminderStore.submitting">
-          {{ reminderStore.submitting ? "保存中…" : "保存提醒" }}
-        </button>
-      </form>
-
-      <section class="list-panel">
-        <div class="panel-heading">
-          <h2>提醒列表</h2>
-          <span class="list-caption">支持完成、延后 10 分钟、删除</span>
+        <div v-if="!reminderStore.loading && !activeItems.length" class="empty-state">
+          <strong>{{ reminderStore.items.length ? "当前没有待处理提醒" : "还没有提醒" }}</strong>
+          <p>
+            {{
+              reminderStore.items.length
+                ? "可以展开已完成分组回看历史，或者新建下一条提醒。"
+                : "先创建一条，让隅灵开始提醒你。"
+            }}
+          </p>
         </div>
 
-        <div v-if="!reminderStore.loading && !reminderStore.items.length" class="empty-state">
-          还没有提醒，先创建一条吧。
-        </div>
-
-        <ul v-else class="reminder-list">
+        <TransitionGroup v-else tag="ul" name="card" class="reminder-list">
           <li
-            v-for="item in reminderStore.items"
+            v-for="item in activeItems"
             :key="item.id"
             class="reminder-card"
             :class="`status-${item.status}`"
           >
             <div class="card-header">
               <div class="card-copy">
+                <p class="card-eyebrow">{{ getCardEyebrow(item.status) }}</p>
                 <strong>{{ item.title }}</strong>
-                <p>{{ item.message || "无备注" }}</p>
+                <p>{{ item.message || "没有备注，按时处理就好。" }}</p>
               </div>
               <span class="status-badge" :class="`is-${item.status}`">
                 {{ formatStatus(item.status) }}
               </span>
             </div>
 
-            <p class="remind-at">{{ formatDisplayTime(item.remind_at) }}</p>
+            <div class="card-footer">
+              <p class="remind-at">{{ formatDisplayTime(item.remind_at) }}</p>
 
-            <div class="card-actions">
-              <button
-                class="action-btn"
-                :disabled="item.status === 'completed' || reminderStore.loading"
-                @click="completeItem(item.id)"
-              >
-                完成
-              </button>
-              <button
-                class="action-btn"
-                :disabled="item.status === 'completed' || reminderStore.loading"
-                @click="snoozeItem(item.id)"
-              >
-                延后
-              </button>
-              <button
-                class="action-btn danger"
-                :disabled="reminderStore.loading"
-                @click="removeItem(item.id)"
-              >
-                删除
-              </button>
+              <div class="card-actions">
+                <button
+                  type="button"
+                  class="action-btn"
+                  :disabled="item.status === 'completed' || reminderStore.loading"
+                  @click="completeItem(item.id)"
+                >
+                  完成
+                </button>
+                <button
+                  type="button"
+                  class="action-btn"
+                  :disabled="item.status === 'completed' || reminderStore.loading"
+                  @click="snoozeItem(item.id)"
+                >
+                  延后
+                </button>
+                <button
+                  type="button"
+                  class="action-btn danger"
+                  :disabled="reminderStore.loading"
+                  @click="removeItem(item.id)"
+                >
+                  删除
+                </button>
+              </div>
             </div>
           </li>
-        </ul>
+        </TransitionGroup>
+      </section>
+
+      <section class="dock-stack">
+        <article class="dock-card" :class="{ open: composerOpen }">
+          <button class="dock-toggle" type="button" @click="toggleComposer">
+            <div>
+              <p class="dock-label">次级区域</p>
+              <strong>新建提醒</strong>
+            </div>
+            <span class="dock-state">{{ composerOpen ? "收起" : "展开" }}</span>
+          </button>
+
+          <Transition name="dock">
+            <form v-if="composerOpen" class="composer-panel" @submit.prevent="submitReminder">
+              <label class="field">
+                <span>标题</span>
+                <input
+                  v-model="reminderStore.composer.title"
+                  type="text"
+                  maxlength="40"
+                  placeholder="比如：喝水、开会、站起来活动"
+                />
+              </label>
+
+              <label class="field">
+                <span>备注</span>
+                <textarea
+                  v-model="reminderStore.composer.message"
+                  rows="3"
+                  maxlength="120"
+                  placeholder="可选，补充一点上下文"
+                />
+              </label>
+
+              <label class="field">
+                <span>提醒时间</span>
+                <input v-model="reminderStore.composer.remindAt" type="datetime-local" />
+              </label>
+
+              <div class="composer-actions">
+                <p v-if="errorMessage" class="error-text">{{ errorMessage }}</p>
+                <button class="primary-btn" type="submit" :disabled="reminderStore.submitting">
+                  {{ reminderStore.submitting ? "保存中…" : "保存提醒" }}
+                </button>
+              </div>
+            </form>
+          </Transition>
+        </article>
+
+        <article class="dock-card" :class="{ open: completedOpen }">
+          <button class="dock-toggle" type="button" @click="toggleCompleted">
+            <div>
+              <p class="dock-label">历史记录</p>
+              <strong>已完成</strong>
+            </div>
+            <span class="dock-state">{{ completedItems.length }} 条</span>
+          </button>
+
+          <Transition name="dock">
+            <div v-if="completedOpen" class="completed-panel">
+              <p v-if="!completedItems.length" class="completed-empty">暂无已完成提醒</p>
+
+              <ul v-else class="completed-list">
+                <li v-for="item in completedItems" :key="item.id" class="completed-item">
+                  <div class="completed-copy">
+                    <strong>{{ item.title }}</strong>
+                    <p>{{ formatDisplayTime(item.remind_at) }}</p>
+                  </div>
+
+                  <button
+                    type="button"
+                    class="ghost-btn danger-btn"
+                    :disabled="reminderStore.loading"
+                    @click="removeItem(item.id)"
+                  >
+                    删除
+                  </button>
+                </li>
+              </ul>
+            </div>
+          </Transition>
+        </article>
       </section>
     </section>
   </div>
@@ -301,44 +419,70 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .reminder-shell {
+  --panel-bg: rgba(8, 12, 21, 0.98);
+  --panel-border: rgba(255, 255, 255, 0.08);
+  --soft-text: rgba(217, 228, 241, 0.72);
+  --muted-text: rgba(159, 176, 200, 0.74);
+  --accent-amber: #f0b257;
+  --accent-mint: #40d8b9;
+  --accent-danger: #f3a2a0;
   width: 100%;
   height: 100%;
-  padding: 18px;
+  padding: 16px;
   background:
-    radial-gradient(circle at top left, rgba(245, 158, 11, 0.2), transparent 34%),
-    radial-gradient(circle at bottom right, rgba(59, 130, 246, 0.22), transparent 38%),
-    linear-gradient(180deg, rgba(8, 10, 18, 0.72), rgba(4, 6, 12, 0.9));
+    radial-gradient(circle at top left, rgba(240, 178, 87, 0.18), transparent 28%),
+    radial-gradient(circle at top right, rgba(64, 216, 185, 0.12), transparent 30%),
+    linear-gradient(180deg, rgba(8, 11, 20, 0.76), rgba(4, 7, 14, 0.94));
+  font-family:
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Microsoft YaHei",
+    sans-serif;
 }
 
 .reminder-window {
+  position: relative;
   width: 100%;
   height: 100%;
-  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 10px;
+  padding: 14px;
   border-radius: 30px;
-  padding: 18px;
-  overflow-y: scroll;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  color: #f8fafc;
-  background: linear-gradient(180deg, rgba(12, 17, 31, 0.96), rgba(4, 7, 15, 0.98));
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 26px 60px rgba(1, 4, 9, 0.55);
-  backdrop-filter: blur(20px) saturate(145%);
+  color: #f7fbff;
+  background:
+    linear-gradient(180deg, rgba(13, 18, 31, 0.98), rgba(7, 10, 19, 0.98));
+  border: 1px solid var(--panel-border);
+  box-shadow:
+    0 28px 60px rgba(1, 4, 9, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
-.hero-bar {
-  width: 42%;
-  height: 6px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #fb7185, #f59e0b, #38bdf8);
-  box-shadow: 0 0 18px rgba(251, 113, 133, 0.35);
+.reminder-window::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 88px;
+  background:
+    linear-gradient(90deg, rgba(240, 178, 87, 0.22), rgba(64, 216, 185, 0.12), transparent);
+  opacity: 0.8;
+  pointer-events: none;
+}
+
+.window-header,
+.control-strip,
+.list-panel,
+.dock-stack {
+  position: relative;
+  z-index: 1;
 }
 
 .window-header {
   display: flex;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
 }
 
 .header-copy h1,
@@ -348,130 +492,370 @@ onBeforeUnmount(() => {
 
 .eyebrow {
   margin: 0 0 6px;
-  font-size: 11px;
+  font-size: 10px;
   letter-spacing: 0.22em;
   text-transform: uppercase;
-  color: rgba(248, 250, 252, 0.55);
+  color: rgba(255, 210, 139, 0.84);
 }
 
 .subtitle,
-.status-line,
-.fired-banner p,
+.list-caption,
+.signal-copy p,
 .card-copy p,
-.list-caption {
+.remind-at,
+.completed-copy p {
   margin: 0;
-  color: rgba(226, 232, 240, 0.72);
+  color: var(--muted-text);
 }
 
 .subtitle {
-  margin-top: 6px;
-  font-size: 13px;
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.header-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.status-pill {
+  max-width: 158px;
+  margin: 0;
+  padding: 7px 11px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 1.2;
+  color: #dfe7f2;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.status-pill.is-live {
+  color: #ffdeaa;
+  background: rgba(240, 178, 87, 0.12);
+}
+
+.status-pill.is-error {
+  color: #ffd3d1;
+  background: rgba(243, 162, 160, 0.14);
+}
+
+.close-btn,
+.ghost-btn,
+.action-btn,
+.dock-toggle,
+.launch-btn,
+.primary-btn {
+  border: none;
+  transition:
+    transform 140ms ease,
+    background-color 180ms ease,
+    box-shadow 180ms ease,
+    opacity 180ms ease;
 }
 
 .close-btn {
   width: 32px;
   height: 32px;
   border-radius: 999px;
-  font-size: 22px;
+  font-size: 20px;
   line-height: 1;
-  color: rgba(248, 250, 252, 0.86);
+  color: rgba(248, 250, 252, 0.88);
   background: rgba(255, 255, 255, 0.08);
 }
 
-.close-btn:hover,
-.ghost-btn:hover,
-.action-btn:hover {
-  background: rgba(255, 255, 255, 0.14);
+.control-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
 }
 
 .summary-panel {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
-.summary-card,
-.fired-banner,
-.composer-panel,
-.list-panel {
+.summary-pill,
+.list-panel,
+.dock-card {
   border-radius: 22px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--panel-border);
   background: rgba(255, 255, 255, 0.04);
 }
 
-.summary-card {
-  padding: 12px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+.summary-pill {
+  padding: 7px 10px;
+  min-width: 74px;
 }
 
-.summary-card span {
-  font-size: 12px;
-  color: rgba(226, 232, 240, 0.72);
+.summary-pill span {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 10px;
+  color: var(--soft-text);
 }
 
-.summary-card strong {
-  font-size: 26px;
+.summary-pill strong {
+  font-size: 15px;
   font-weight: 700;
 }
 
-.status-line {
-  padding: 0 4px;
-  font-size: 12px;
+.signal-pill {
+  min-width: 122px;
+  background: linear-gradient(135deg, rgba(240, 178, 87, 0.12), rgba(64, 216, 185, 0.08));
 }
 
-.fired-banner {
-  padding: 12px 14px;
-  background: linear-gradient(135deg, rgba(251, 113, 133, 0.12), rgba(56, 189, 248, 0.08));
+.signal-pill strong {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.fired-label {
-  margin-bottom: 6px;
-  font-size: 11px;
-  letter-spacing: 0.16em;
+.launch-btn {
+  align-self: stretch;
+  min-height: 46px;
+  padding: 0 14px;
+  border-radius: 16px;
+  color: #151921;
+  font-size: 13px;
+  font-weight: 800;
+  background: linear-gradient(135deg, var(--accent-amber), #ef8b65);
+  box-shadow: 0 10px 20px rgba(239, 139, 101, 0.24);
+}
+
+.signal-label,
+.card-eyebrow,
+.dock-label {
+  margin: 0 0 6px;
+  font-size: 10px;
+  letter-spacing: 0.18em;
   text-transform: uppercase;
+  color: rgba(255, 210, 139, 0.8);
 }
 
-.composer-panel,
+.signal-copy strong,
+.completed-copy strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 15px;
+}
+
 .list-panel {
-  padding: 14px;
-}
-
-.composer-panel {
-  display: flex;
-  flex-direction: column;
+  min-height: 0;
+  padding: 12px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 10px;
-}
-
-.list-panel {
-  flex: 1;
-  min-height: 180px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
 }
 
 .panel-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 10px;
+}
+
+.list-caption {
+  margin-top: 4px;
+  font-size: 11px;
 }
 
 .ghost-btn {
-  padding: 6px 12px;
-  border-radius: 999px;
+  padding: 8px 12px;
+  border-radius: 14px;
   font-size: 12px;
+  color: #e7eff8;
   background: rgba(255, 255, 255, 0.08);
 }
 
-.field {
+.empty-state {
+  min-height: 160px;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  border-radius: 18px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.empty-state strong {
+  font-size: 16px;
+}
+
+.empty-state p {
+  margin: 8px 0 0;
+  color: var(--muted-text);
+  line-height: 1.6;
+}
+
+.reminder-list,
+.completed-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.reminder-list {
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  padding-right: 4px;
+}
+
+.reminder-card {
+  position: relative;
+  overflow: hidden;
+  padding: 11px 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background:
+    linear-gradient(180deg, rgba(10, 17, 30, 0.96), rgba(7, 12, 21, 0.98));
+}
+
+.reminder-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: linear-gradient(180deg, var(--accent-amber), var(--accent-mint));
+}
+
+.reminder-card.status-notified {
+  box-shadow: inset 0 0 0 1px rgba(240, 178, 87, 0.16);
+}
+
+.card-header,
+.card-footer,
+.completed-item,
+.dock-toggle,
+.composer-actions {
   display: flex;
-  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.card-copy {
+  min-width: 0;
+}
+
+.card-copy strong {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 15px;
+  line-height: 1.15;
+}
+
+.card-copy p {
+  font-size: 11px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.status-badge {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.status-badge.is-pending {
+  color: #ffe09d;
+}
+
+.status-badge.is-notified {
+  color: #ffc38d;
+}
+
+.card-footer {
+  margin-top: 8px;
+  align-items: center;
+}
+
+.remind-at {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.card-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.action-btn {
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 10px;
+  font-size: 11px;
+  color: #e8f0f8;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.action-btn.danger,
+.danger-btn {
+  color: var(--accent-danger);
+}
+
+.dock-stack {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.dock-card {
+  overflow: hidden;
+}
+
+.dock-card.open {
+  grid-column: 1 / -1;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.dock-toggle {
+  width: 100%;
+  min-height: 74px;
+  padding: 10px 12px;
+  color: #f7fbff;
+  background: transparent;
+}
+
+.dock-toggle strong {
+  font-size: 14px;
+}
+
+.dock-state {
+  align-self: center;
+  font-size: 11px;
+  color: var(--soft-text);
+}
+
+.composer-panel,
+.completed-panel {
+  padding: 0 14px 14px;
+}
+
+.composer-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.field {
+  display: grid;
   gap: 6px;
   font-size: 12px;
-  color: rgba(226, 232, 240, 0.82);
+  color: var(--soft-text);
 }
 
 .field input,
@@ -480,34 +864,109 @@ onBeforeUnmount(() => {
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 14px;
   padding: 10px 12px;
-  color: inherit;
-  background: rgba(15, 23, 42, 0.62);
+  color: #f7fbff;
+  background: rgba(11, 18, 31, 0.8);
   outline: none;
 }
 
 .field input:focus,
 .field textarea:focus {
-  border-color: rgba(56, 189, 248, 0.6);
-  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.12);
+  border-color: rgba(64, 216, 185, 0.6);
+  box-shadow: 0 0 0 3px rgba(64, 216, 185, 0.12);
 }
 
 .field textarea {
   resize: none;
 }
 
+.composer-actions {
+  align-items: center;
+}
+
 .error-text {
   margin: 0;
   font-size: 12px;
-  color: #fda4af;
+  color: #ffd3d1;
 }
 
 .primary-btn {
-  align-self: flex-end;
-  padding: 10px 16px;
-  border-radius: 999px;
-  color: #04111f;
-  font-weight: 700;
-  background: linear-gradient(120deg, #fb7185, #f59e0b);
+  min-height: 38px;
+  padding: 0 16px;
+  border-radius: 14px;
+  font-size: 13px;
+  font-weight: 800;
+  color: #12161d;
+  background: linear-gradient(135deg, var(--accent-amber), #ef8b65);
+}
+
+.completed-list {
+  display: grid;
+  gap: 8px;
+  max-height: 160px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.completed-item {
+  padding: 11px 12px;
+  border-radius: 16px;
+  align-items: center;
+  background: rgba(11, 18, 31, 0.68);
+}
+
+.completed-empty {
+  margin: 0;
+  color: var(--muted-text);
+  font-size: 12px;
+}
+
+.completed-copy p {
+  font-size: 12px;
+}
+
+@media (max-height: 760px) {
+  .reminder-shell {
+    padding: 12px;
+  }
+
+  .reminder-window {
+    gap: 8px;
+    padding: 12px;
+  }
+
+  .window-header {
+    gap: 8px;
+  }
+
+  .summary-pill {
+    min-width: 68px;
+  }
+
+  .dock-toggle {
+    min-height: 66px;
+  }
+}
+
+.close-btn:hover,
+.ghost-btn:hover,
+.action-btn:hover,
+.dock-toggle:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.launch-btn:hover,
+.primary-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 24px rgba(239, 139, 101, 0.28);
+}
+
+.close-btn:active,
+.ghost-btn:active,
+.action-btn:active,
+.dock-toggle:active,
+.launch-btn:active,
+.primary-btn:active {
+  transform: scale(0.98);
 }
 
 .primary-btn:disabled,
@@ -515,106 +974,64 @@ onBeforeUnmount(() => {
 .action-btn:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+  box-shadow: none;
 }
 
-.empty-state {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 18px;
-  color: rgba(226, 232, 240, 0.6);
-  background: rgba(255, 255, 255, 0.03);
+.card-enter-active,
+.card-leave-active {
+  transition:
+    transform 260ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 220ms ease,
+    filter 220ms ease;
 }
 
-.reminder-list {
-  list-style: none;
-  margin: 0;
-  padding: 0 4px 0 0;
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  overflow-y: auto;
+.card-enter-from,
+.card-leave-to {
+  opacity: 0;
+  transform: translateY(12px) scale(0.98);
+  filter: blur(8px);
 }
 
-.reminder-card {
-  padding: 12px;
-  border-radius: 18px;
-  background: rgba(15, 23, 42, 0.58);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+.card-move {
+  transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.reminder-card.status-notified {
-  border-color: rgba(251, 146, 60, 0.45);
+.dock-enter-active,
+.dock-leave-active {
+  overflow: hidden;
+  transition:
+    max-height 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 220ms ease,
+    transform 240ms ease;
 }
 
-.reminder-card.status-completed {
-  opacity: 0.72;
+.dock-enter-from,
+.dock-leave-to {
+  max-height: 0;
+  opacity: 0;
+  transform: translateY(-8px);
 }
 
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
+.dock-enter-to,
+.dock-leave-from {
+  max-height: 320px;
+  opacity: 1;
+  transform: translateY(0);
 }
 
-.card-copy strong {
-  display: block;
-  margin-bottom: 4px;
-  font-size: 15px;
-}
-
-.card-copy p {
-  font-size: 12px;
-}
-
-.status-badge {
-  flex-shrink: 0;
-  align-self: flex-start;
-  padding: 4px 8px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
-  background: rgba(255, 255, 255, 0.08);
-}
-
-.status-badge.is-pending {
-  color: #fde68a;
-}
-
-.status-badge.is-notified {
-  color: #fdba74;
-}
-
-.status-badge.is-completed {
-  color: #86efac;
-}
-
-.remind-at {
-  margin: 0;
-  font-size: 12px;
-  color: rgba(226, 232, 240, 0.72);
-}
-
-.card-actions {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.action-btn {
-  padding: 8px 0;
-  border-radius: 12px;
-  font-size: 12px;
-  background: rgba(255, 255, 255, 0.08);
-}
-
-.action-btn.danger {
-  color: #fda4af;
+@media (prefers-reduced-motion: reduce) {
+  .close-btn,
+  .ghost-btn,
+  .action-btn,
+  .dock-toggle,
+  .launch-btn,
+  .primary-btn,
+  .card-enter-active,
+  .card-leave-active,
+  .card-move,
+  .dock-enter-active,
+  .dock-leave-active {
+    transition: none !important;
+  }
 }
 </style>
