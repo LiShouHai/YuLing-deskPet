@@ -11,7 +11,7 @@ use tauri::{
     async_runtime::spawn,
     image::Image,
     menu::{MenuBuilder, MenuEvent},
-    tray::{TrayIconBuilder, TrayIconEvent},
+    tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager,
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt as AutostartExt};
@@ -22,6 +22,12 @@ const TRAY_ID_SHOW: &str = "tray-show";
 const TRAY_ID_AUTOSTART: &str = "tray-autostart";
 const TRAY_ID_REMINDERS: &str = "tray-reminders";
 const TRAY_ID_QUIT: &str = "tray-quit";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrayIconAction {
+    None,
+    RevealMainWindow,
+}
 
 /// 屏幕坐标点（物理像素）
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -213,6 +219,16 @@ fn handle_tray_menu_event(app: &AppHandle, event: &MenuEvent) {
     }
 }
 
+fn tray_icon_action(event: &TrayIconEvent) -> TrayIconAction {
+    match event {
+        TrayIconEvent::DoubleClick {
+            button: MouseButton::Left,
+            ..
+        } => TrayIconAction::RevealMainWindow,
+        _ => TrayIconAction::None,
+    }
+}
+
 /// 初始化系统托盘：菜单、图标、点击行为
 fn init_tray(app: &AppHandle) -> tauri::Result<()> {
     #[cfg(desktop)]
@@ -232,17 +248,68 @@ fn init_tray(app: &AppHandle) -> tauri::Result<()> {
             .show_menu_on_left_click(true)
             .on_menu_event(|app, event| handle_tray_menu_event(app, &event))
             .on_tray_icon_event(|tray, event| {
-                if let TrayIconEvent::Click { .. } = event {
-                    if let Some(window) = tray.app_handle().get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
+                if tray_icon_action(&event) == TrayIconAction::RevealMainWindow {
+                    let app = tray.app_handle();
+                    reveal_main_window(&app);
                 }
             })
             .build(app)?;
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{tray_icon_action, TrayIconAction};
+    use tauri::{
+        tray::{MouseButton, MouseButtonState, TrayIconEvent, TrayIconId},
+        PhysicalPosition, PhysicalSize, Position, Rect, Size,
+    };
+
+    fn sample_rect() -> Rect {
+        Rect {
+            position: Position::Physical(PhysicalPosition::new(0, 0)),
+            size: Size::Physical(PhysicalSize::new(16, 16)),
+        }
+    }
+
+    #[test]
+    fn single_left_click_does_not_steal_menu_focus() {
+        let event = TrayIconEvent::Click {
+            id: TrayIconId::new("tray"),
+            position: PhysicalPosition::new(0.0, 0.0),
+            rect: sample_rect(),
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Down,
+        };
+
+        assert_eq!(tray_icon_action(&event), TrayIconAction::None);
+    }
+
+    #[test]
+    fn left_button_double_click_reveals_main_window() {
+        let event = TrayIconEvent::DoubleClick {
+            id: TrayIconId::new("tray"),
+            position: PhysicalPosition::new(0.0, 0.0),
+            rect: sample_rect(),
+            button: MouseButton::Left,
+        };
+
+        assert_eq!(tray_icon_action(&event), TrayIconAction::RevealMainWindow);
+    }
+
+    #[test]
+    fn non_left_double_click_is_ignored() {
+        let event = TrayIconEvent::DoubleClick {
+            id: TrayIconId::new("tray"),
+            position: PhysicalPosition::new(0.0, 0.0),
+            rect: sample_rect(),
+            button: MouseButton::Right,
+        };
+
+        assert_eq!(tray_icon_action(&event), TrayIconAction::None);
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
